@@ -1,4 +1,4 @@
-# 🌍 World Generator &amp; Prefab Spawner for Unity
+# 🌍 World Generator for Unity
 ![Unity](https://img.shields.io/badge/Unity-2022.3+-black.svg?style=for-the-badge&logo=unity)
 ![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)
 ![Version](https://img.shields.io/badge/Version-1.0-blue.svg?style=for-the-badge)
