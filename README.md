@@ -1,7 +1,10 @@
 # 🌍 World Generator for Unity
-![Unity](https://img.shields.io/badge/Unity-2022.3+-black.svg?style=for-the-badge&logo=unity)
-![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)
-![Version](https://img.shields.io/badge/Version-1.0-blue.svg?style=for-the-badge)
+<a href="https://github.com/NeonShadowYT/WorldGenerator/stargazers"><img src="https://img.shields.io/github/stars/NeonShadowYT/WorldGenerator?style=flat-square&logo=github&color=FFC107" alt="GitHub Stars"></a>
+<a href="https://github.com/NeonShadowYT?tab=followers"><img src="https://img.shields.io/github/followers/NeonShadowYT?style=flat-square&logo=github&label=Followers&color=282c34" alt="GitHub Followers"></a>
+<a href="https://github.com/NeonShadowYT/WorldGenerator/commits/main"><img src="https://img.shields.io/github/last-commit/NeonShadowYT/WorldGenerator?style=flat-square&logo=github&color=blueviolet" alt="Last Commit"></a>
+<a href="https://github.com/NeonShadowYT/WorldGenerator/releases"><img src="https://img.shields.io/github/v/release/NeonShadowYT/WorldGenerator?style=flat-square" alt="Release"></a>
+<a href="https://unity.com/"><img src="https://img.shields.io/badge/Unity-2022.3+-2296F3.svg?style=flat-square&logo=unity" alt="Unity Version"></a>
+<a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
 
 **Мощный инструмент для продвинутого размещения префабов в 3D-пространстве**  
 *Создавайте сложные сцены с интеллектуальным размещением объектов*
