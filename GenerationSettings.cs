@@ -10,6 +10,7 @@ namespace NeonImperium
         
         [Tooltip("Тип спавнящихся объектов. Влияет на логику обработки после создания.")]
         public WorldSpawnType spawnType = WorldSpawnType.Object;
+        public FractionRace raceType = FractionRace.Starver;
         
         [Tooltip("Список префабов для случайного выбора при генерации. Если пустой - генерация не работает.")]
         public GameObject[] prefabs;
@@ -22,7 +23,7 @@ namespace NeonImperium
         
         [Header("Вариации")]
         [Tooltip("Диапазон случайного масштаба объектов. (0.8, 1.2) = от 80% до 120% от оригинального размера.")]
-        [MinMaxRange(0.1f, 10f, "F2")] public Vector2 scaleRange = new(0.8f, 1.2f);
+        [MinMaxRange(0.1f, 10f, "F1")] public Vector2 scaleRange = new(0.8f, 1.2f);
         
         [Tooltip("Диапазон случайного вращения вокруг оси Y в градусах. (0, 360) = полный случайный поворот.")]
         [MinMaxRange(0f, 360f, "F0")] public Vector2 rotationRange = new(0f, 360f);

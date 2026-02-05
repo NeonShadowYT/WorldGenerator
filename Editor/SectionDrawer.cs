@@ -24,6 +24,9 @@ namespace NeonImperium
                 
                 DrawPropertyWithHelp(settings, "spawnType", "Тип объектов для спавна:\n• Object - обычные объекты\n• Enemy - враги (специальная логика)");
                 EditorGUILayout.Space(3f);
+
+                DrawPropertyWithHelp(settings, "raceType", "Тип расы объекта, фракция которой он принадлежит");
+                EditorGUILayout.Space(3f);
                 
                 DrawPropertyWithHelp(settings, "prefabs", "Список префабов для случайного выбора. Если пустой - генерация не работает.");
                 EditorGUILayout.Space(3f);

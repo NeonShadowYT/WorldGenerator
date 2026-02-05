@@ -188,7 +188,7 @@ namespace NeonImperium
                     Quaternion.FromToRotation(Vector3.up, hit.normal) * 
                     Quaternion.Euler(0, Random.Range(settings.rotationRange.x, settings.rotationRange.y), 0) :
                     Quaternion.Euler(0, Random.Range(settings.rotationRange.x, settings.rotationRange.y), 0),
-                scale = Vector3.one * Random.Range(settings.scaleRange.x, settings.scaleRange.y),
+                scale = 0.1f * Mathf.Round(Random.Range(settings.scaleRange.x, settings.scaleRange.y) / 0.1f) * Vector3.one,
                 prefab = settings.prefabs.Length > 0 ? 
                     settings.prefabs[Random.Range(0, settings.prefabs.Length)] : null
             };
