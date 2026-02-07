@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEditor;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     public class EditorStyleManager
     {

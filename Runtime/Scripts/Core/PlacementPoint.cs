@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     public struct PlacementPoint { public Vector3 localPosition; }
 

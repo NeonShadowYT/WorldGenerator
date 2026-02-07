@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     public interface IPlacementStrategy
     {

@@ -1,6 +1,6 @@
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
-    public enum WorldSpawnType { Object, Enemy }
+    public enum GenerationAlgorithmType { Standard }
     public enum RayOriginType { TopFace, SideFaces, InsideVolume }
     public enum RayCastType { Ray, Sphere }
     

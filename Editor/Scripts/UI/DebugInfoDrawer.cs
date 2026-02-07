@@ -1,9 +1,10 @@
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
-using System.Linq;
+using System.Collections.Generic;
+using UnityEditor.SceneManagement;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     public class DebugInfoDrawer
     {
@@ -46,50 +47,66 @@ namespace NeonImperium
                     EditorGUI.ProgressBar(rectEff, efficiency, $"⚡ Эффективность: {efficiency:P0}");
                     EditorGUILayout.Space(3f);
 
-                    // Статистика ошибок
                     if (spawner.FailureStatistics != null && spawner.FailureStatistics.Count > 0)
                     {
                         EditorGUILayout.Space(3f);
                         EditorGUILayout.LabelField("❌ Причины ошибок:", EditorStyles.boldLabel);
                         
-                        var sortedReasons = spawner.FailureStatistics
-                            .OrderByDescending(kvp => kvp.Value)
-                            .ToList();
+                        List<KeyValuePair<FailureReasonType, int>> sortedReasons = new List<KeyValuePair<FailureReasonType, int>>();
+                        foreach (KeyValuePair<FailureReasonType, int> kvp in spawner.FailureStatistics)
+                        {
+                            sortedReasons.Add(kvp);
+                        }
+                        
+                        for (int i = 0; i < sortedReasons.Count - 1; i++)
+                        {
+                            for (int j = 0; j < sortedReasons.Count - i - 1; j++)
+                            {
+                                if (sortedReasons[j].Value < sortedReasons[j + 1].Value)
+                                {
+                                    KeyValuePair<FailureReasonType, int> temp = sortedReasons[j];
+                                    sortedReasons[j] = sortedReasons[j + 1];
+                                    sortedReasons[j + 1] = temp;
+                                }
+                            }
+                        }
 
-                        foreach (var kvp in sortedReasons)
+                        for (int i = 0; i < sortedReasons.Count; i++)
                         {
                             EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField($"{GetFailureReasonName(kvp.Key)}:");
-                            EditorGUILayout.LabelField($"{kvp.Value}", GUILayout.Width(50));
+                            EditorGUILayout.LabelField($"{GetFailureReasonName(sortedReasons[i].Key)}:");
+                            EditorGUILayout.LabelField($"{sortedReasons[i].Value}", GUILayout.Width(50));
                             EditorGUILayout.EndHorizontal();
                         }
 
-                        var topReason = sortedReasons.FirstOrDefault();
-                        if (topReason.Value > 0)
+                        if (sortedReasons.Count > 0)
                         {
-                            EditorGUILayout.Space(3f);
-                            string advice = GetAdviceForReason(topReason.Key);
-                            
-                            // Особые советы для проблем со стабильностью
-                            if (topReason.Key == FailureReasonType.EdgeCheck)
+                            KeyValuePair<FailureReasonType, int> topReason = sortedReasons[0];
+                            if (topReason.Value > 0)
                             {
-                                EditorGUILayout.HelpBox(
-                                    $"⚠️ <b>ОСНОВНАЯ ПРОБЛЕМА: СТРОГАЯ ПРОВЕРКА СТАБИЛЬНОСТИ</b>\n" +
-                                    $"Обнаружено {topReason.Value} отказов из-за неровной поверхности.\n\n" +
-                                    $"💡 <b>Рекомендации:</b>\n" +
-                                    $"• Уменьшите Edge Check Radius до 0.5-1 метра\n" +
-                                    $"• Увеличьте Allowed Slope Angles до (0,45)\n" +
-                                    $"• Уменьшите Slope Check Rays до 4 для скорости\n" +
-                                    $"• Или отключите проверку стабильности (Edge Check Radius = 0)",
-                                    MessageType.Warning);
-                            }
-                            else if (efficiency <= 0.025f)
-                            {
-                                EditorGUILayout.HelpBox(
-                                    $"⚠️ <b>Спавнер не эффективен. Основная причина:</b>\n" +
-                                    $"{GetFailureReasonName(topReason.Key)}\n" +
-                                    $"💡 <b>Рекомендация:</b> {advice}",
-                                    MessageType.Warning);
+                                EditorGUILayout.Space(3f);
+                                string advice = GetAdviceForReason(topReason.Key);
+                                
+                                if (topReason.Key == FailureReasonType.EdgeCheck)
+                                {
+                                    EditorGUILayout.HelpBox(
+                                        $"⚠️ <b>ОСНОВНАЯ ПРОБЛЕМА: СТРОГАЯ ПРОВЕРКА СТАБИЛЬНОСТИ</b>\n" +
+                                        $"Обнаружено {topReason.Value} отказов из-за неровной поверхности.\n\n" +
+                                        $"💡 <b>Рекомендации:</b>\n" +
+                                        $"• Уменьшите edgeCheckRadius до 0.5-1 метра\n" +
+                                        $"• Увеличьте maxHeightDifference до 0.3-0.5 метра\n" +
+                                        $"• Уменьшите stabilityCheckRays до 4 для скорости\n" +
+                                        $"• Или отключите проверку стабильности (edgeCheckRadius = 0)",
+                                        MessageType.Warning);
+                                }
+                                else if (efficiency <= 0.025f)
+                                {
+                                    EditorGUILayout.HelpBox(
+                                        $"⚠️ <b>Спавнер не эффективен. Основная причина:</b>\n" +
+                                        $"{GetFailureReasonName(topReason.Key)}\n" +
+                                        $"💡 <b>Рекомендация:</b> {advice}",
+                                        MessageType.Warning);
+                                }
                             }
                         }
                     }
@@ -105,7 +122,6 @@ namespace NeonImperium
                             MessageType.Warning);
                     }
 
-                    // Советы по эффективности
                     if (efficiency > 0.7f)
                     {
                         EditorGUILayout.Space(3f);
@@ -123,12 +139,22 @@ namespace NeonImperium
                     EditorGUILayout.Space(3f);
                     EditorGUILayout.LabelField("🔦 Лучей отладки:", $"{spawner.debugRays.Count}");
                     
-                    // Показываем статистику по типам лучей
-                    var rayStats = spawner.debugRays.GroupBy(r => r.rayType)
-                        .ToDictionary(g => g.Key, g => g.Count());
+                    Dictionary<DebugRayType, int> rayStats = new Dictionary<DebugRayType, int>();
+                    for (int i = 0; i < spawner.debugRays.Count; i++)
+                    {
+                        DebugRayType rayType = spawner.debugRays[i].rayType;
+                        if (rayStats.ContainsKey(rayType))
+                        {
+                            rayStats[rayType]++;
+                        }
+                        else
+                        {
+                            rayStats[rayType] = 1;
+                        }
+                    }
                     
                     EditorGUILayout.LabelField("📊 Статистика лучей:", EditorStyles.boldLabel);
-                    foreach (var stat in rayStats)
+                    foreach (KeyValuePair<DebugRayType, int> stat in rayStats)
                     {
                         EditorGUILayout.BeginHorizontal();
                         EditorGUILayout.LabelField($"{GetRayTypeName(stat.Key)}:");
@@ -155,7 +181,6 @@ namespace NeonImperium
                     }
                 }
 
-                // Кнопка настроек отображения лучей
                 EditorGUILayout.Space(3f);
                 DrawDebugRaySettings(spawner, styleManager);
 
@@ -174,23 +199,19 @@ namespace NeonImperium
             
             if (showDebugRaySettings)
             {
-                EditorGUI.indentLevel++;
-                
-                var debugSettings = spawner.settings.debugRaySettings;
+                DebugRaySettings debugSettings = spawner.settings.debugRaySettings;
                 
                 EditorGUI.BeginChangeCheck();
                 
-                debugSettings.enabled = EditorGUILayout.Toggle("Включить отображение лучей", debugSettings.enabled);
+                debugSettings.enabled = EditorGUILayout.Toggle("enabled", debugSettings.enabled);
                 
                 if (debugSettings.enabled)
                 {
-                    EditorGUI.indentLevel++;
-                    
-                    debugSettings.showMainRays = EditorGUILayout.Toggle("Основные лучи", debugSettings.showMainRays);
-                    debugSettings.showStabilityRays = EditorGUILayout.Toggle("Лучи стабильности", debugSettings.showStabilityRays);
-                    debugSettings.showFloorRays = EditorGUILayout.Toggle("Лучи проверки пола", debugSettings.showFloorRays);
-                    debugSettings.showAvoidanceRays = EditorGUILayout.Toggle("Лучи препятствий", debugSettings.showAvoidanceRays);
-                    debugSettings.showCeilingRays = EditorGUILayout.Toggle("Лучи проверки потолка", debugSettings.showCeilingRays);
+                    debugSettings.showMainRays = EditorGUILayout.Toggle("showMainRays", debugSettings.showMainRays);
+                    debugSettings.showStabilityRays = EditorGUILayout.Toggle("showStabilityRays", debugSettings.showStabilityRays);
+                    debugSettings.showFloorRays = EditorGUILayout.Toggle("showFloorRays", debugSettings.showFloorRays);
+                    debugSettings.showAvoidanceRays = EditorGUILayout.Toggle("showAvoidanceRays", debugSettings.showAvoidanceRays);
+                    debugSettings.showCeilingRays = EditorGUILayout.Toggle("showCeilingRays", debugSettings.showCeilingRays);
                     
                     EditorGUILayout.Space(3f);
                     
@@ -211,21 +232,16 @@ namespace NeonImperium
                         debugSettings.showAvoidanceRays = false;
                         debugSettings.showCeilingRays = false;
                     }
-                    
-                    EditorGUI.indentLevel--;
                 }
                 
                 if (EditorGUI.EndChangeCheck())
                 {
-                    // Помечаем сцену как измененную для сохранения настроек
                     if (!Application.isPlaying)
                     {
-                        UnityEditor.EditorUtility.SetDirty(spawner);
-                        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(spawner.gameObject.scene);
+                        EditorUtility.SetDirty(spawner);
+                        EditorSceneManager.MarkSceneDirty(spawner.gameObject.scene);
                     }
                 }
-                
-                EditorGUI.indentLevel--;
             }
             
             EditorGUILayout.EndVertical();
@@ -270,7 +286,7 @@ namespace NeonImperium
                 case FailureReasonType.CeilingCheck: 
                     return "Отключите checkCeiling или уменьшите высоту";
                 case FailureReasonType.EdgeCheck: 
-                    return "Уменьшите edgeCheckRadius, увеличьте allowedSlopeAngles или отключите проверку";
+                    return "Уменьшите edgeCheckRadius, увеличьте maxHeightDifference или отключите проверку";
                 case FailureReasonType.FloorCheck: 
                     return "Уменьшите floorCheckDistance или настройте avoidMask";
                 case FailureReasonType.NearObstacle: 

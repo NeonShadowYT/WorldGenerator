@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     public static class PlacementCalculator
     {
@@ -19,9 +19,9 @@ namespace NeonImperium
 
             SetRayDirection(settings, ref rayDirection, ref rayDistance);
 
-            bool hasHit = false;
-            RaycastHit hit = new();
-            Color rayColor = Color.red;
+            bool hasHit;
+            RaycastHit hit;
+            Color rayColor;
 
             switch (settings.rayCastType)
             {

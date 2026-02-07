@@ -2,10 +2,9 @@
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
-using System.Linq;
 using System.Collections.Generic;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     [CustomEditor(typeof(WorldGeneration))]
     [CanEditMultipleObjects]
@@ -16,9 +15,8 @@ namespace NeonImperium
         private ActionButtonsDrawer _actionDrawer;
         private DebugInfoDrawer _debugDrawer;
         
-        private bool _showDebugInfo, _showPlacementSettings, _showRaySettings, _showHelpBoxes,
-            _showSpawnSettings = true, _showAvoidanceSettings, _showClusteringSettings, _showStabilitySettings;
-        
+        private bool _showDebugInfo, _showHelpBoxes;
+
         private bool _isRegeneratingAll;
         private int _currentSpawnerIndex;
         private int _totalSpawners;
@@ -42,8 +40,8 @@ namespace NeonImperium
             _styleManager.InitializeStyles();
             serializedObject.Update();
 
-            var settingsProp = serializedObject.FindProperty("settings");
-            var headerColor = settingsProp.FindPropertyRelative("gizmoColor").colorValue;
+            SerializedProperty settingsProp = serializedObject.FindProperty("settings");
+            Color headerColor = settingsProp.FindPropertyRelative("gizmoColor").colorValue;
             _styleManager.UpdateStyles(headerColor);
 
             DrawHeaders();
@@ -76,15 +74,6 @@ namespace NeonImperium
             if (newHelpState != _showHelpBoxes)
             {
                 _showHelpBoxes = newHelpState;
-                if (!_showHelpBoxes)
-                {
-                    _showSpawnSettings = true;
-                    _showClusteringSettings = false;
-                    _showPlacementSettings = false;
-                    _showRaySettings = false;
-                    _showStabilitySettings = false;
-                    _showAvoidanceSettings = false;
-                }
             }
 
             if (_showHelpBoxes)
@@ -102,24 +91,25 @@ namespace NeonImperium
 
         private void DrawSettings()
         {
-            var settings = serializedObject.FindProperty("settings");
+            SerializedProperty settings = serializedObject.FindProperty("settings");
+            WorldGeneration spawner = target as WorldGeneration;
             
-            _sectionDrawer.DrawSpawnSettings(settings, ref _showSpawnSettings, _showHelpBoxes);
-            _sectionDrawer.DrawClusteringSettings(settings, ref _showClusteringSettings, _showHelpBoxes);
-            _sectionDrawer.DrawPlacementSettings(settings, ref _showPlacementSettings, _showHelpBoxes, targets);
-            _sectionDrawer.DrawRaySettings(settings, ref _showRaySettings, _showHelpBoxes);
-            _sectionDrawer.DrawStabilitySettings(settings, ref _showStabilitySettings, _showHelpBoxes);
-            _sectionDrawer.DrawAvoidanceSettings(settings, ref _showAvoidanceSettings, _showHelpBoxes);
+            _sectionDrawer.DrawSpawnSettings(settings, _showHelpBoxes, targets, spawner);
+            _sectionDrawer.DrawClusteringSettings(settings, _showHelpBoxes, spawner);
+            _sectionDrawer.DrawRaySettings(settings, _showHelpBoxes, spawner);
+            _sectionDrawer.DrawStabilitySettings(settings, _showHelpBoxes, spawner);
+            _sectionDrawer.DrawAvoidanceSettings(settings, _showHelpBoxes, spawner);
         }
 
-        // Методы для ActionButtonsDrawer
         public void GenerateSelected() => ProcessSpawners(s => s.GenerateObjects());
         public void ClearSelected() => ProcessSpawners(s => s.ClearAll());
         
         private void ProcessSpawners(System.Action<WorldGeneration> action)
         {
-            foreach (WorldGeneration spawner in targets.Cast<WorldGeneration>())
+            UnityEngine.Object[] targetArray = targets;
+            for (int i = 0; i < targetArray.Length; i++)
             {
+                WorldGeneration spawner = targetArray[i] as WorldGeneration;
                 action(spawner);
                 MarkSceneDirty(spawner.gameObject);
             }
@@ -137,17 +127,26 @@ namespace NeonImperium
 
         public void RegenerateAllSpawners()
         {
-            _allSpawners = FindObjectsByType<WorldGeneration>(FindObjectsSortMode.None)
-                .OrderBy(s => s.settings.spawnType)
-                .ToList();
+            _allSpawners = new List<WorldGeneration>(FindObjectsByType<WorldGeneration>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+            
+            for (int i = 0; i < _allSpawners.Count - 1; i++)
+            {
+                for (int j = 0; j < _allSpawners.Count - i - 1; j++)
+                {
+                    if (_allSpawners[j].settings.priority < _allSpawners[j + 1].settings.priority)
+                    {
+                        (_allSpawners[j + 1], _allSpawners[j]) = (_allSpawners[j], _allSpawners[j + 1]);
+                    }
+                }
+            }
 
             _totalSpawners = _allSpawners.Count;
             _currentSpawnerIndex = 0;
             _isRegeneratingAll = true;
 
-            foreach (var spawner in _allSpawners)
+            for (int i = 0; i < _allSpawners.Count; i++)
             {
-                spawner.ClearAll();
+                _allSpawners[i].ClearAll();
             }
 
             EditorApplication.update += RegenerateAllUpdate;
@@ -163,7 +162,7 @@ namespace NeonImperium
                 return;
             }
 
-            var currentSpawner = _allSpawners[_currentSpawnerIndex];
+            WorldGeneration currentSpawner = _allSpawners[_currentSpawnerIndex];
             
             if (!currentSpawner.IsGenerating && currentSpawner.SpawnedCount == 0)
             {

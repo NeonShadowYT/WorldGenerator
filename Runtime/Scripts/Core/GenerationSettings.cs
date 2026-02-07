@@ -1,6 +1,7 @@
 using UnityEngine;
+using System.Collections.Generic;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     [System.Serializable]
     public class SpawnSettings
@@ -8,9 +9,11 @@ namespace NeonImperium
         [Tooltip("Цвет отображения зоны спавна в редакторе. Не влияет на игровой процесс.")]
         [ColorUsage(false)] public Color gizmoColor = new(0.65f, 0f, 1f);
         
-        [Tooltip("Тип спавнящихся объектов. Влияет на логику обработки после создания.")]
-        public WorldSpawnType spawnType = WorldSpawnType.Object;
-        public FractionRace raceType = FractionRace.Starver;
+        [Tooltip("Тип алгоритма генерации объектов.")]
+        public GenerationAlgorithmType generationAlgorithm = GenerationAlgorithmType.Standard;
+        
+        [Tooltip("Приоритет генерации. Спавнеры с более высоким приоритетом генерируются первыми при полной перегенерации.")]
+        [Range(0, 100)] public int priority = 50;
         
         [Tooltip("Список префабов для случайного выбора при генерации. Если пустой - генерация не работает.")]
         public GameObject[] prefabs;
@@ -21,7 +24,6 @@ namespace NeonImperium
         [Tooltip("Размеры зоны спавна в локальных координатах спавнера. X,Z - горизонтальная площадь, Y - высота проверки.")]
         public Vector3 dimensions = new(100, 10, 100);
         
-        [Header("Вариации")]
         [Tooltip("Диапазон случайного масштаба объектов. (0.8, 1.2) = от 80% до 120% от оригинального размера.")]
         [MinMaxRange(0.1f, 10f, "F1")] public Vector2 scaleRange = new(0.8f, 1.2f);
         
@@ -31,7 +33,6 @@ namespace NeonImperium
         [Tooltip("Случайное смещение по вертикали от точки попадания. Полезно для корректировки высоты посадки.")]
         public Vector2 verticalOffset = Vector2.zero;
         
-        [Header("Правила размещения")]
         [Tooltip("Слои, по которым осуществляется поиск поверхности для размещения. Только эти слои будут считаться валидной поверхностью.")]
         public LayerMask collisionMask = -1;
         
@@ -47,7 +48,12 @@ namespace NeonImperium
         [Tooltip("Максимальное количество попыток размещения одного объекта перед отказом. Больше = лучшее заполнение, но медленнее.")]
         [Range(1, 100)] public int maxPlacementAttempts = 10;
 
-        [Header("Настройки луча")]
+        [Tooltip("Расширения, вызываемые при создании каждого объекта")]
+        public List<WorldGenerationExtension> onSpawnExtensions = new();
+        
+        [Tooltip("Расширения, вызываемые после завершения генерации всех объектов")]
+        public List<WorldGenerationExtension> onGenerationCompleteExtensions = new();
+
         [Tooltip("Тип луча для обнаружения поверхности:\n- Ray: обычный луч\n- Sphere: сферический луч (толще)")]
         public RayCastType rayCastType = RayCastType.Ray;
         
@@ -65,11 +71,9 @@ namespace NeonImperium
         [Tooltip("Проверять наличие препятствий над точкой размещения. Полезно для предотвращения спавна под мостами или крышами.")]
         public bool checkCeiling = false;
 
-        [Header("Стабильность поверхности")]
         [Tooltip("Радиус проверки стабильности поверхности вокруг точки. 0 = отключить проверку.\nПроверяет, что объект не окажется на краю обрыва или неровной поверхности.")]
         [Min(0f)] public float edgeCheckRadius = 0f;
         
-        [Header("Проверка высоты")]
         [Tooltip("Максимальная допустимая разница высот между центральной точкой и точками проверки.\n• 0.1 = 10 см\n• 0.5 = 50 см\n• 1.0 = 1 метр\n• 0.0 = любая разница = отказ")]
         [Min(0f)] public float maxHeightDifference = 0.1f;
         
@@ -83,7 +87,6 @@ namespace NeonImperium
         [Tooltip("Минимальное расстояние между объектами. Предотвращает наслоение объектов.")]
         [Min(0f)] public float minDistanceBetweenObjects = 5f;
         
-        [Header("Кластеризация")]
         [Tooltip("Включить группировку объектов в кластеры. Полезно для создания природных скоплений.")]
         public bool useClustering = false;
         

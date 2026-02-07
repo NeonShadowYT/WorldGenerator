@@ -1,22 +1,29 @@
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
-using System.Linq;
-using System.Collections.Generic;
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     public class ActionButtonsDrawer
     {
-        public void DrawActionButtons(WorldGenerationView view, UnityEngine.Object[] targets, 
-            ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref List<WorldGeneration> allSpawners)
+        public void DrawActionButtons(WorldGenerationView view, Object[] targets, 
+            ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref System.Collections.Generic.List<WorldGeneration> allSpawners)
         {
-            bool anyGenerating = targets.Cast<WorldGeneration>().Any(s => s.IsGenerating) || isRegeneratingAll;
-            bool anyHaveObjects = targets.Cast<WorldGeneration>().Any(s => s.transform.childCount > 0);
+            bool anyGenerating = false;
+            bool anyHaveObjects = false;
+            bool masksConflict = false;
 
-            bool masksConflict = targets.Cast<WorldGeneration>()
-                .Any(s => s.settings.avoidMask.value == s.settings.collisionMask.value && 
-                         s.settings.avoidMask.value != 0);
+            for (int i = 0; i < targets.Length; i++)
+            {
+                WorldGeneration spawner = targets[i] as WorldGeneration;
+                if (spawner.IsGenerating) anyGenerating = true;
+                if (spawner.transform.childCount > 0) anyHaveObjects = true;
+                if (spawner.settings.avoidMask.value == spawner.settings.collisionMask.value && 
+                    spawner.settings.avoidMask.value != 0)
+                {
+                    masksConflict = true;
+                }
+            }
             
             if (masksConflict)
             {
@@ -34,14 +41,14 @@ namespace NeonImperium
             {
                 if (anyGenerating)
                 {
-                    if (DrawButton(" ⏹️ Остановить", "d_PreMatQuad", "Прервать текущую генерацию")) 
+                    if (DrawButton(" ⏹️ Остановить", "Прервать текущую генерацию")) 
                         view.CancelAllGenerations();
                 }
                 else
                 {
-                    if (DrawButton(" 🎲 Сгенерировать", "d_Toolbar Plus", "Начать создание объектов")) 
+                    if (DrawButton(" 🎲 Сгенерировать", "Начать создание объектов")) 
                         view.GenerateSelected();
-                    if (anyHaveObjects && DrawButton(" 🗑️ Очистить", "d_TreeEditor.Trash", "Удалить все созданные объекты")) 
+                    if (anyHaveObjects && DrawButton(" 🗑️ Очистить", "Удалить все созданные объекты")) 
                         view.ClearSelected();
                 }
             }
@@ -67,7 +74,7 @@ namespace NeonImperium
             else if (!anyGenerating)
             {
                 EditorGUILayout.Space(4f);
-                if (DrawButton(" 🔄 Полная перегенерация", "d_PreMatCube", "Перегенерировать все спавнеры на сцене"))
+                if (DrawButton(" 🔄 Полная перегенерация", "Перегенерировать все спавнеры на сцене"))
                 {
                     view.RegenerateAllSpawners();
                 }
@@ -76,9 +83,9 @@ namespace NeonImperium
             EditorGUILayout.Space(4f);
         }
         
-        private bool DrawButton(string text, string iconName, string tooltip)
+        private bool DrawButton(string text, string tooltip)
         {
-            var style = new GUIStyle(EditorStyles.miniButton)
+            GUIStyle style = new(EditorStyles.miniButton)
             {
                 padding = new RectOffset(10, 10, 5, 5),
                 fixedHeight = 30,
@@ -88,7 +95,7 @@ namespace NeonImperium
             };
             
             return GUILayout.Button(
-                new GUIContent(text, EditorGUIUtility.IconContent(iconName).image, tooltip), 
+                new GUIContent(text, tooltip), 
                 style
             );
         }

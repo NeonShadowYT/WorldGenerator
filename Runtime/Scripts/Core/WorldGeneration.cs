@@ -6,7 +6,7 @@ using System.Collections;
 using UnityEditor;
 #endif
 
-namespace NeonImperium
+namespace NeonImperium.WorldGeneration
 {
     [ExecuteInEditMode]
     public class WorldGeneration : MonoBehaviour
@@ -20,7 +20,6 @@ namespace NeonImperium
         [SerializeField, HideInInspector] private List<PlacementData> placementCache = new();
         [SerializeField, HideInInspector] private int totalPlacementAttempts;
         
-        // Новая статистика ошибок
         public Dictionary<FailureReasonType, int> FailureStatistics { get; private set; } = new();
         
         private IPlacementStrategy placementStrategy;
@@ -28,21 +27,28 @@ namespace NeonImperium
         private bool generationInProgress;
         private const int PlacementAttemptsPerFrame = 25;
         
-        private List<Vector3> clusterCenters;
-        private int currentClusterIndex;
-        private int objectsInCurrentCluster;
-        private int targetObjectsInCluster;
+        private List<ClusterData> clusters;
+        private int totalObjectsPlacedInClusters;
+        
+        [System.Serializable]
+        public class ClusterData
+        {
+            public Vector3 center;
+            public float radius;
+            public int targetObjects;
+            public int placedObjects;
+            public bool isActive = true;
+        }
 
         public List<DebugRay> debugRays = new();
 
         public void ClearDebugRays() => debugRays.Clear();
-        public int GetClusterCentersCount() => clusterCenters?.Count ?? 0;
+        public int GetClusterCentersCount() => clusters?.Count ?? 0;
 
         public void AddDebugRay(Vector3 start, Vector3 direction, float distance, Color color, DebugRayType rayType)
         {
             if (!settings.debugRaySettings.enabled) return;
             
-            // Проверяем, нужно ли отображать этот тип луча
             bool shouldDraw = rayType switch
             {
                 DebugRayType.Main => settings.debugRaySettings.showMainRays,
@@ -82,17 +88,15 @@ namespace NeonImperium
         {
             if (Application.isPlaying) return;
             
-            // Ограничения для настроек
             settings.population = Math.Max(1, settings.population);
             settings.maxPlacementAttempts = Math.Max(1, settings.maxPlacementAttempts);
+            settings.priority = Mathf.Clamp(settings.priority, 0, 100);
             
-            // Ограничения для rotationRange
             settings.rotationRange.x = Mathf.Clamp(settings.rotationRange.x, 0f, 360f);
             settings.rotationRange.y = Mathf.Clamp(settings.rotationRange.y, 0f, 360f);
             if (settings.rotationRange.x > settings.rotationRange.y)
                 settings.rotationRange.x = settings.rotationRange.y;
             
-            // Ограничения для scaleRange
             settings.scaleRange.x = Mathf.Max(0.1f, settings.scaleRange.x);
             settings.scaleRange.y = Mathf.Max(0.1f, settings.scaleRange.y);
             if (settings.scaleRange.x > settings.scaleRange.y)
@@ -100,13 +104,11 @@ namespace NeonImperium
 
             settings.maxHeightDifference = Mathf.Max(0.1f, settings.maxHeightDifference);
             
-            // Ограничения для maxRayAngle
             settings.maxRayAngle.x = Mathf.Clamp(settings.maxRayAngle.x, 0f, 90f);
             settings.maxRayAngle.y = Mathf.Clamp(settings.maxRayAngle.y, 0f, 90f);
             if (settings.maxRayAngle.x > settings.maxRayAngle.y)
                 settings.maxRayAngle.x = settings.maxRayAngle.y;
             
-            // Ограничения для кластеризации
             settings.clusterCount = Mathf.Clamp(settings.clusterCount, 1, 100);
             settings.clusterRadiusRange.x = Mathf.Max(1f, settings.clusterRadiusRange.x);
             settings.clusterRadiusRange.y = Mathf.Max(1f, settings.clusterRadiusRange.y);
@@ -128,32 +130,59 @@ namespace NeonImperium
             Gizmos.color = settings.gizmoColor;
             Gizmos.DrawWireCube(Vector3.zero, settings.dimensions);
             
-            var transparentColor = new Color(settings.gizmoColor.r, settings.gizmoColor.g, 
+            Color transparentColor = new Color(settings.gizmoColor.r, settings.gizmoColor.g, 
                                           settings.gizmoColor.b, 0.1f);
             Gizmos.color = transparentColor;
             Gizmos.DrawCube(Vector3.zero, settings.dimensions);
             
             Gizmos.matrix = Matrix4x4.identity;
             
-            // Отрисовываем лучи только если включена настройка
             if (settings.debugRaySettings.enabled)
             {
-                foreach (var ray in debugRays)
+                for (int i = 0; i < debugRays.Count; i++)
                 {
-                    Gizmos.color = ray.color;
-                    Gizmos.DrawLine(ray.start, ray.end);
+                    Gizmos.color = debugRays[i].color;
+                    Gizmos.DrawLine(debugRays[i].start, debugRays[i].end);
                 }
             }
             
-            if (settings.useClustering && clusterCenters != null)
+            if (settings.useClustering && clusters != null)
             {
-                foreach (var center in clusterCenters)
+                for (int i = 0; i < clusters.Count; i++)
                 {
-                    Vector3 worldCenter = transform.TransformPoint(center);
-                    Gizmos.color = Color.green;
-                    Gizmos.DrawWireSphere(worldCenter, 0.5f);
-                    Gizmos.color = new Color(0, 1, 0, 0.3f);
-                    Gizmos.DrawSphere(worldCenter, settings.clusterRadiusRange.y);
+                    ClusterData cluster = clusters[i];
+                    Vector3 worldCenter = transform.TransformPoint(cluster.center);
+                    
+                    if (cluster.isActive)
+                    {
+                        Gizmos.color = Color.green;
+                        Gizmos.DrawWireSphere(worldCenter, 0.5f);
+                        Gizmos.color = new Color(0, 1, 0, 0.3f);
+                        Gizmos.DrawSphere(worldCenter, cluster.radius);
+                        
+                        GUIStyle labelStyle = new GUIStyle();
+                        labelStyle.normal.textColor = Color.white;
+                        labelStyle.fontSize = 10;
+                        labelStyle.alignment = TextAnchor.MiddleCenter;
+                        
+                        Handles.Label(worldCenter + Vector3.up * 2f, 
+                            $"Кластер {i}\n{cluster.placedObjects}/{cluster.targetObjects}", labelStyle);
+                    }
+                    else
+                    {
+                        Gizmos.color = Color.gray;
+                        Gizmos.DrawWireSphere(worldCenter, 0.5f);
+                        Gizmos.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
+                        Gizmos.DrawSphere(worldCenter, cluster.radius);
+                        
+                        GUIStyle labelStyle = new GUIStyle();
+                        labelStyle.normal.textColor = Color.gray;
+                        labelStyle.fontSize = 10;
+                        labelStyle.alignment = TextAnchor.MiddleCenter;
+                        
+                        Handles.Label(worldCenter + Vector3.up * 2f, 
+                            $"Кластер {i}\nНеактивен", labelStyle);
+                    }
                 }
             }
         }
@@ -198,9 +227,10 @@ namespace NeonImperium
             
             placementCache.Clear();
             totalPlacementAttempts = 0;
-            clusterCenters = null;
+            clusters = null;
+            totalObjectsPlacedInClusters = 0;
             ClearDebugRays();
-            FailureStatistics.Clear(); // Очищаем статистику
+            FailureStatistics.Clear();
         }
 
         private void StopGeneration()
@@ -217,7 +247,7 @@ namespace NeonImperium
         {
             generationInProgress = true;
             placementCache = new List<PlacementData>(settings.population);
-            FailureStatistics.Clear(); // Сбрасываем статистику перед генерацией
+            FailureStatistics.Clear();
             
             while (placementCache.Count < settings.population)
             {
@@ -228,6 +258,7 @@ namespace NeonImperium
             }
             
             CreateObjectsFromPlacementData();
+            CallGenerationCompleteExtensions();
             generationInProgress = false;
         }
 
@@ -238,49 +269,56 @@ namespace NeonImperium
             int attempts = 0;
             int maxAttempts = desiredCount * settings.maxPlacementAttempts;
 
-            if (settings.useClustering && clusterCenters == null)
+            if (settings.useClustering && clusters == null)
             {
-                GenerateClusterCenters();
+                GenerateClusters();
             }
 
             while (validPoints < desiredCount && attempts++ < maxAttempts)
             {
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверяем, не достигли ли мы уже лимита
                 if (placementCache.Count >= settings.population)
                     break;
                     
                 totalPlacementAttempts++;
                 
                 PlacementPoint point;
-                if (settings.useClustering && currentClusterIndex < clusterCenters.Count)
+                if (settings.useClustering && totalObjectsPlacedInClusters < settings.population)
                 {
-                    point = GeneratePointInCluster();
+                    point = GeneratePointInActiveCluster();
+                    if (point.localPosition == Vector3.zero)
+                    {
+                        continue;
+                    }
                 }
                 else
                 {
                     point = placementStrategy.GeneratePoint(settings, transform);
                 }
                 
-                var placementData = PlacementCalculator.CalculatePoint(
+                PlacementData placementData = PlacementCalculator.CalculatePoint(
                     point, settings, transform, placementCache, this
                 );
                 
                 if (placementData.isValid)
                 {
-                    // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаемся, что не превышаем лимит
                     if (placementCache.Count < settings.population)
                     {
                         placementCache.Add(placementData);
                         validPoints++;
+                        
+                        if (settings.useClustering)
+                        {
+                            totalObjectsPlacedInClusters++;
+                            UpdateActiveClusters();
+                        }
                     }
                     else
                     {
-                        break; // Достигли лимита - выходим
+                        break;
                     }
                 }
                 else
                 {
-                    // Обновляем статистику ошибок
                     if (FailureStatistics.ContainsKey(placementData.failureReason))
                     {
                         FailureStatistics[placementData.failureReason]++;
@@ -293,20 +331,22 @@ namespace NeonImperium
             }
         }
         
-        private void GenerateClusterCenters()
+        private void GenerateClusters()
         {
-            clusterCenters = new List<Vector3>();
-            currentClusterIndex = 0;
-            objectsInCurrentCluster = 0;
+            clusters = new List<ClusterData>();
+            totalObjectsPlacedInClusters = 0;
             
             float halfX = settings.dimensions.x * 0.5f;
             float halfZ = settings.dimensions.z * 0.5f;
             int attempts = 0;
-            int maxClusterAttempts = settings.clusterCount * 50;
+            int maxClusterAttempts = settings.clusterCount * 100;
             
-            while (clusterCenters.Count < settings.clusterCount && attempts++ < maxClusterAttempts)
+            int clustersCreated = 0;
+            int targetClusters = Mathf.Min(settings.clusterCount, settings.population);
+            
+            while (clustersCreated < targetClusters && attempts++ < maxClusterAttempts)
             {
-                Vector3 localCandidate = new(
+                Vector3 localCandidate = new Vector3(
                     UnityEngine.Random.Range(-halfX, halfX),
                     0,
                     UnityEngine.Random.Range(-halfZ, halfZ)
@@ -314,94 +354,142 @@ namespace NeonImperium
                 
                 Vector3 worldCandidate = transform.TransformPoint(localCandidate);
                 
-                // Получаем точку на поверхности с помощью луча
                 Vector3 rayStart = worldCandidate + Vector3.up * settings.dimensions.y;
                 if (Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, settings.dimensions.y * 2, settings.collisionMask))
                 {
-                    // Используем точку попадания луча как центр кластера
                     Vector3 surfacePosition = hit.point;
                     Vector3 localSurface = transform.InverseTransformPoint(surfacePosition);
                     
-                    bool valid = true;
-                    foreach (var existing in clusterCenters)
+                    bool validPosition = true;
+                    for (int i = 0; i < clusters.Count; i++)
                     {
-                        if (Vector3.Distance(localSurface, existing) < settings.minDistanceBetweenClusters)
+                        if (Vector3.Distance(localSurface, clusters[i].center) < settings.minDistanceBetweenClusters)
                         {
-                            valid = false;
+                            validPosition = false;
                             break;
                         }
                     }
                     
-                    if (valid) clusterCenters.Add(localSurface);
+                    if (validPosition)
+                    {
+                        ClusterData newCluster = new ClusterData
+                        {
+                            center = localSurface,
+                            radius = UnityEngine.Random.Range(
+                                settings.clusterRadiusRange.x,
+                                settings.clusterRadiusRange.y
+                            ),
+                            targetObjects = UnityEngine.Random.Range(
+                                settings.objectsPerClusterRange.x,
+                                settings.objectsPerClusterRange.y + 1
+                            ),
+                            placedObjects = 0,
+                            isActive = true
+                        };
+                        
+                        clusters.Add(newCluster);
+                        clustersCreated++;
+                    }
                 }
             }
             
-            if (clusterCenters.Count < settings.clusterCount)
+            if (clusters.Count < targetClusters)
             {
-                Debug.LogWarning($"Created only {clusterCenters.Count}/{settings.clusterCount} clusters.");
-                // Записываем ошибку кластеризации
+                Debug.LogWarning($"Создано только {clusters.Count}/{targetClusters} кластеров. Увеличьте зону спавна или уменьшите minDistanceBetweenClusters.");
                 if (FailureStatistics.ContainsKey(FailureReasonType.ClusterFailed))
-                    FailureStatistics[FailureReasonType.ClusterFailed]++;
+                {
+                    FailureStatistics[FailureReasonType.ClusterFailed] += targetClusters - clusters.Count;
+                }
                 else
-                    FailureStatistics[FailureReasonType.ClusterFailed] = 1;
+                {
+                    FailureStatistics[FailureReasonType.ClusterFailed] = targetClusters - clusters.Count;
+                }
             }
             
-            if (clusterCenters.Count > 0)
+            int totalTargetObjects = 0;
+            for (int i = 0; i < clusters.Count; i++)
             {
-                targetObjectsInCluster = UnityEngine.Random.Range(
-                    settings.objectsPerClusterRange.x,
-                    settings.objectsPerClusterRange.y + 1
-                );
+                totalTargetObjects += clusters[i].targetObjects;
+            }
+            
+            if (totalTargetObjects < settings.population)
+            {
+                Debug.LogWarning($"Целевое количество объектов в кластерах ({totalTargetObjects}) меньше требуемого ({settings.population}). Увеличьте objectsPerClusterRange.");
+            }
+            else if (totalTargetObjects > settings.population * 2)
+            {
+                Debug.LogWarning($"Целевое количество объектов в кластерах ({totalTargetObjects}) значительно превышает требуемое ({settings.population}). Уменьшите objectsPerClusterRange.");
             }
         }
         
-        private PlacementPoint GeneratePointInCluster()
+        private PlacementPoint GeneratePointInActiveCluster()
         {
-            Vector3 center = clusterCenters[currentClusterIndex];
-            float radius = UnityEngine.Random.Range(
-                settings.clusterRadiusRange.x,
-                settings.clusterRadiusRange.y
-            );
+            List<ClusterData> activeClusters = new List<ClusterData>();
+            for (int i = 0; i < clusters.Count; i++)
+            {
+                if (clusters[i].isActive && clusters[i].placedObjects < clusters[i].targetObjects)
+                {
+                    activeClusters.Add(clusters[i]);
+                }
+            }
             
-            PlacementPoint point = new();
+            if (activeClusters.Count == 0)
+            {
+                return new PlacementPoint { localPosition = Vector3.zero };
+            }
+            
+            ClusterData selectedCluster = activeClusters[UnityEngine.Random.Range(0, activeClusters.Count)];
+            
+            PlacementPoint point = new PlacementPoint();
             int attempts = 0;
-            const int maxAttempts = 10;
+            const int maxAttempts = 20;
             
             while (attempts++ < maxAttempts)
             {
-                Vector2 randomPoint = UnityEngine.Random.insideUnitCircle * radius;
-                point.localPosition = center + new Vector3(randomPoint.x, 0, randomPoint.y);
+                Vector2 randomPoint = UnityEngine.Random.insideUnitCircle * selectedCluster.radius;
+                point.localPosition = selectedCluster.center + new Vector3(randomPoint.x, 0, randomPoint.y);
                 
                 Vector3 worldPos = transform.TransformPoint(point.localPosition);
                 
-                // Проверяем точку по тем же правилам, что и центры
                 if (PlacementCalculator.IsValidClusterCenter(worldPos, settings, transform))
-                    break;
+                {
+                    selectedCluster.placedObjects++;
+                    return point;
+                }
             }
             
-            objectsInCurrentCluster++;
-            if (objectsInCurrentCluster >= targetObjectsInCluster && 
-                currentClusterIndex < clusterCenters.Count - 1)
+            return new PlacementPoint { localPosition = Vector3.zero };
+        }
+        
+        private void UpdateActiveClusters()
+        {
+            bool allClustersFull = true;
+            for (int i = 0; i < clusters.Count; i++)
             {
-                currentClusterIndex++;
-                objectsInCurrentCluster = 0;
-                targetObjectsInCluster = UnityEngine.Random.Range(
-                    settings.objectsPerClusterRange.x,
-                    settings.objectsPerClusterRange.y + 1
-                );
+                if (clusters[i].placedObjects >= clusters[i].targetObjects)
+                {
+                    clusters[i].isActive = false;
+                }
+                else
+                {
+                    clusters[i].isActive = true;
+                    allClustersFull = false;
+                }
             }
             
-            return point;
+            if (allClustersFull && totalObjectsPlacedInClusters < settings.population)
+            {
+                Debug.LogWarning($"Все кластеры заполнены, но целевое количество объектов ({settings.population}) не достигнуто. Увеличьте objectsPerClusterRange.");
+            }
         }
 
         private void CreateObjectsFromPlacementData()
         {
-            // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Ограничиваем количество создаваемых объектов
             int objectsToCreate = Mathf.Min(placementCache.Count, settings.population);
             
             for (int i = 0; i < objectsToCreate; i++)
             {
-                var data = placementCache[i];
+                PlacementData data = placementCache[i];
                 if (!data.isValid || data.prefab == null) continue;
                 
                 GameObject newObj = Application.isPlaying ? 
@@ -410,6 +498,70 @@ namespace NeonImperium
                 
                 newObj.transform.SetPositionAndRotation(data.position, data.rotation);
                 newObj.transform.localScale = data.scale;
+
+                CallOnSpawnExtensions(newObj);
+            }
+            
+            if (settings.useClustering && clusters != null)
+            {
+                Debug.Log($"Кластеризация завершена: создано {placementCache.Count} объектов в {clusters.Count} кластерах");
+                
+                int emptyClusters = 0;
+                int overfilledClusters = 0;
+                int totalObjectsInClusters = 0;
+                
+                for (int i = 0; i < clusters.Count; i++)
+                {
+                    totalObjectsInClusters += clusters[i].placedObjects;
+                    
+                    if (clusters[i].placedObjects == 0)
+                    {
+                        emptyClusters++;
+                    }
+                    else if (clusters[i].placedObjects > clusters[i].targetObjects)
+                    {
+                        overfilledClusters++;
+                    }
+                }
+                
+                if (emptyClusters > 0)
+                {
+                    Debug.LogWarning($"⚠️ {emptyClusters} кластеров остались пустыми. Уменьшите clusterRadiusRange или objectsPerClusterRange.");
+                }
+                
+                if (overfilledClusters > 0)
+                {
+                    Debug.LogWarning($"⚠️ {overfilledClusters} кластеров переполнены. Увеличьте clusterRadiusRange или objectsPerClusterRange.");
+                }
+                
+                if (totalObjectsInClusters < settings.population * 0.7f)
+                {
+                    Debug.LogWarning($"⚠️ Кластеризация неэффективна: создано только {totalObjectsInClusters} объектов из {settings.population}. Увеличьте clusterCount или objectsPerClusterRange.");
+                }
+            }
+        }
+
+        private void CallOnSpawnExtensions(GameObject obj)
+        {
+            for (int i = 0; i < settings.onSpawnExtensions.Count; i++)
+            {
+                WorldGenerationExtension extension = settings.onSpawnExtensions[i];
+                if (extension != null)
+                {
+                    extension.OnGameObjectSpawned(obj);
+                }
+            }
+        }
+
+        private void CallGenerationCompleteExtensions()
+        {
+            for (int i = 0; i < settings.onGenerationCompleteExtensions.Count; i++)
+            {
+                WorldGenerationExtension extension = settings.onGenerationCompleteExtensions[i];
+                if (extension != null)
+                {
+                    extension.OnGenerationComplete();
+                }
             }
         }
 
@@ -424,6 +576,7 @@ namespace NeonImperium
             else
             {
                 CreateObjectsFromPlacementData();
+                CallGenerationCompleteExtensions();
                 StopGeneration();
             }
             SceneView.RepaintAll();
