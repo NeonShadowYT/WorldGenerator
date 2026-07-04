@@ -105,6 +105,32 @@ namespace NeonImperium.WorldGeneration
         [Header("Отладка лучей")]
         [Tooltip("Настройки отображения лучей отладки для визуализации процесса генерации.")]
         public DebugRaySettings debugRaySettings = new();
+
+        [Header("Runtime")]
+        [Tooltip("Разрешить работу генератора в собранной игре (Runtime). Если отключено, компонент будет уничтожен при старте.")]
+        public bool enableRuntimeGeneration = false;
+
+        [Tooltip("Автоматически запускать генерацию при старте (только если enableRuntimeGeneration = true).")]
+        public bool autoGenerateOnStart = false;
+
+        [Tooltip("Удалить компонент после завершения генерации (экономит память).")]
+        public bool destroyAfterGeneration = false;
+
+        [Tooltip("Максимальное общее количество попыток размещения в Runtime (предотвращает бесконечные циклы).")]
+        [Min(1)] public int runtimeMaxAttempts = 10000;
+
+        [Tooltip("Количество перезапусков генерации при недостижении целевого количества объектов (только Runtime).")]
+        [Range(0, 10)] public int runtimeRetryCount = 3;
+
+        [Header("NavMesh")]
+        [Tooltip("Проверять, что точка размещения находится на NavMesh (требуется система NavMesh).")]
+        public bool useNavMeshCheck = false;
+
+        [Tooltip("Радиус поиска ближайшей точки на NavMesh. Если 0, используется стандартное значение.")]
+        public float navMeshSampleRadius = 1f;
+
+        [Tooltip("Корректировать позицию на ближайшую точку NavMesh (если точка не на NavMesh, но рядом).")]
+        public bool snapToNavMesh = false;
     }
 
     [System.Serializable]

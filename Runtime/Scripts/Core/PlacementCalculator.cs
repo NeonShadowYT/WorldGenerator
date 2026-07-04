@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using UnityEngine.AI;
 
 namespace NeonImperium.WorldGeneration
 {
@@ -73,6 +74,43 @@ namespace NeonImperium.WorldGeneration
             );
 
             if (!hasHit) return InvalidResult(worldPos, FailureReasonType.NoHit);
+
+            // Проверка NavMesh
+            if (settings.useNavMeshCheck)
+            {
+                Vector3 hitPoint = hit.point;
+                float sampleRadius = settings.navMeshSampleRadius > 0 ? settings.navMeshSampleRadius : 1f;
+                
+                if (NavMesh.SamplePosition(hitPoint, out NavMeshHit navHit, sampleRadius, NavMesh.AllAreas))
+                {
+                    if (settings.snapToNavMesh)
+                    {
+                        // Корректируем позицию на ближайшую точку NavMesh
+                        hit.point = navHit.position;
+                        
+                        if (settings.alignToSurface)
+                        {
+                            // Можно использовать нормаль NavMesh, но она не всегда совпадает с геометрией.
+                        }
+                    }
+                    else
+                    {
+                        // Проверяем, что точка попадания находится на NavMesh (в пределах допустимого расстояния)
+                        float distanceToNavMesh = Vector3.Distance(hitPoint, navHit.position);
+                        if (distanceToNavMesh > 0.01f) // Если точка не на NavMesh, отказ
+                        {
+                            debugSource?.AddDebugRay(hit.point, Vector3.up, 0.5f, Color.red, DebugRayType.Main);
+                            return InvalidResult(worldPos, FailureReasonType.NoNavMesh);
+                        }
+                    }
+                }
+                else
+                {
+                    // Точка не найдена на NavMesh
+                    debugSource?.AddDebugRay(hit.point, Vector3.up, 0.5f, Color.red, DebugRayType.Main);
+                    return InvalidResult(worldPos, FailureReasonType.NoNavMesh);
+                }
+            }
 
             if (settings.edgeCheckRadius > 0 && !IsSurfaceStableByHeight(hit.point, hit.normal, settings, debugSource))
                 return InvalidResult(worldPos, FailureReasonType.EdgeCheck);

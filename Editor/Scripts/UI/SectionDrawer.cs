@@ -297,6 +297,70 @@ namespace NeonImperium.WorldGeneration
             });
         }
 
+        public void DrawRuntimeSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
+        {
+            EditorFoldoutState.RuntimeSettings = DrawSection("⚡ Настройки Runtime", EditorFoldoutState.RuntimeSettings, spawner, () =>
+            {
+                EditorGUILayout.BeginVertical("box");
+                DrawPropertyWithHelp(settings, "enableRuntimeGeneration", "Разрешить работу генератора в собранной игре (Runtime). Если отключено, компонент будет уничтожен при старте.");
+                if (settings.FindPropertyRelative("enableRuntimeGeneration").boolValue)
+                {
+                    DrawPropertyWithHelp(settings, "autoGenerateOnStart", "Автоматически запускать генерацию при старте (только если enableRuntimeGeneration = true).");
+                    DrawPropertyWithHelp(settings, "destroyAfterGeneration", "Удалить компонент после завершения генерации (экономит память).");
+                    EditorGUILayout.Space(5f);
+                    EditorGUILayout.LabelField("🛡️ Защита от бесконечных циклов", EditorStyles.boldLabel);
+                    DrawPropertyWithHelp(settings, "runtimeMaxAttempts", "Максимальное общее количество попыток размещения в Runtime (предотвращает зависания).");
+                    DrawPropertyWithHelp(settings, "runtimeRetryCount", "Количество перезапусков генерации при недостижении цели (0 = не перезапускать).");
+                }
+                EditorGUILayout.EndVertical();
+
+                if (showHelpBoxes)
+                {
+                    EditorGUILayout.Space(3f);
+                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
+                    EditorGUILayout.LabelField("<b>⚡ Особенности работы в Runtime</b>", _styleManager.MiniLabelStyle);
+                    EditorGUILayout.LabelField(
+                        "• <b>enableRuntimeGeneration</b> – если выключено, компонент удаляется при старте игры.\n" +
+                        "• <b>autoGenerateOnStart</b> – автоматический запуск генерации при старте.\n" +
+                        "• <b>destroyAfterGeneration</b> – удаляет компонент после генерации, освобождая память.\n" +
+                        "• <b>runtimeMaxAttempts</b> – лимит попыток, после которого попытка прерывается.\n" +
+                        "• <b>runtimeRetryCount</b> – количество дополнительных попыток, если цель не достигнута.\n" +
+                        "• <b>Вручную</b> можно запустить генерацию через <b>spawner.Generate()</b> или корутину <b>spawner.GenerateCoroutine()</b>.",
+                        _styleManager.MiniLabelStyle);
+                    EditorGUILayout.EndVertical();
+                }
+            });
+        }
+
+        public void DrawNavMeshSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
+        {
+            EditorFoldoutState.NavMeshSettings = DrawSection("🧭 NavMesh", EditorFoldoutState.NavMeshSettings, spawner, () =>
+            {
+                EditorGUILayout.BeginVertical("box");
+                DrawPropertyWithHelp(settings, "useNavMeshCheck", "Проверять, что точка размещения находится на NavMesh (требуется система NavMesh).");
+                if (settings.FindPropertyRelative("useNavMeshCheck").boolValue)
+                {
+                    DrawPropertyWithHelp(settings, "navMeshSampleRadius", "Радиус поиска ближайшей точки на NavMesh. 0 = стандартное значение (1).");
+                    DrawPropertyWithHelp(settings, "snapToNavMesh", "Корректировать позицию на ближайшую точку NavMesh (если точка не на NavMesh, но рядом).");
+                }
+                EditorGUILayout.EndVertical();
+
+                if (showHelpBoxes)
+                {
+                    EditorGUILayout.Space(3f);
+                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
+                    EditorGUILayout.LabelField("<b>🧭 Использование NavMesh</b>", _styleManager.MiniLabelStyle);
+                    EditorGUILayout.LabelField(
+                        "• <b>useNavMeshCheck</b> – включает проверку принадлежности точки NavMesh.\n" +
+                        "• <b>snapToNavMesh</b> – автоматически корректирует позицию, если точка рядом с NavMesh.\n" +
+                        "• <b>navMeshSampleRadius</b> – зона поиска для SamplePosition.\n" +
+                        "Полезно для размещения объектов, с которыми взаимодействуют NPC (добыча, ресурсы).",
+                        _styleManager.MiniLabelStyle);
+                    EditorGUILayout.EndVertical();
+                }
+            });
+        }
+
         private bool DrawSection(string title, bool showState, WorldGeneration spawner, System.Action content)
         {
             EditorGUILayout.BeginVertical("box");

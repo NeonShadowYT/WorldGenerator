@@ -99,9 +99,11 @@ namespace NeonImperium.WorldGeneration
             _sectionDrawer.DrawRaySettings(settings, _showHelpBoxes, spawner);
             _sectionDrawer.DrawStabilitySettings(settings, _showHelpBoxes, spawner);
             _sectionDrawer.DrawAvoidanceSettings(settings, _showHelpBoxes, spawner);
+            _sectionDrawer.DrawRuntimeSettings(settings, _showHelpBoxes, spawner);
+            _sectionDrawer.DrawNavMeshSettings(settings, _showHelpBoxes, spawner);
         }
 
-        public void GenerateSelected() => ProcessSpawners(s => s.GenerateObjects());
+        public void GenerateSelected() => ProcessSpawners(s => s.Generate());
         public void ClearSelected() => ProcessSpawners(s => s.ClearAll());
         
         private void ProcessSpawners(System.Action<WorldGeneration> action)
@@ -166,7 +168,7 @@ namespace NeonImperium.WorldGeneration
             
             if (!currentSpawner.IsGenerating && currentSpawner.SpawnedCount == 0)
             {
-                currentSpawner.GenerateObjects();
+                currentSpawner.Generate();
             }
             else if (!currentSpawner.IsGenerating)
             {

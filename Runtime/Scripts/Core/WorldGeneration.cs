@@ -16,7 +16,9 @@ namespace NeonImperium.WorldGeneration
         public int ValidPlacementCount => placementCache.Count;
         public bool IsGenerating => generationInProgress;
         public int TotalPlacementAttempts => totalPlacementAttempts;
-        
+
+        public event Action OnGenerationComplete;
+
         [SerializeField, HideInInspector] private List<PlacementData> placementCache = new();
         [SerializeField, HideInInspector] private int totalPlacementAttempts;
         
@@ -29,6 +31,7 @@ namespace NeonImperium.WorldGeneration
         
         private List<ClusterData> clusters;
         private int totalObjectsPlacedInClusters;
+        private int runtimeRetryCount;
         
         [System.Serializable]
         public class ClusterData
@@ -70,18 +73,34 @@ namespace NeonImperium.WorldGeneration
             });
         }
 
+        private void Awake()
+        {
+            placementStrategy ??= new RandomPlacement();
+        }
+
         private void Start()
         {
-            if (Application.isPlaying) Destroy(this);
+            if (!Application.isPlaying) return;
+
+            if (!settings.enableRuntimeGeneration)
+            {
+                Destroy(this);
+                return;
+            }
+
+            if (settings.autoGenerateOnStart)
+            {
+                Generate();
+            }
         }
-        
+
         private void OnDestroy()
         {
-            StopAllCoroutines();
-            #if UNITY_EDITOR
+            StopGeneration();
+#if UNITY_EDITOR
             EditorApplication.update -= AsyncGenerationUpdate;
             SceneView.duringSceneGui -= OnSceneGUI;
-            #endif
+#endif
         }
 
         private void OnValidate()
@@ -91,6 +110,8 @@ namespace NeonImperium.WorldGeneration
             settings.population = Math.Max(1, settings.population);
             settings.maxPlacementAttempts = Math.Max(1, settings.maxPlacementAttempts);
             settings.priority = Mathf.Clamp(settings.priority, 0, 100);
+            settings.runtimeMaxAttempts = Math.Max(1, settings.runtimeMaxAttempts);
+            settings.runtimeRetryCount = Mathf.Clamp(settings.runtimeRetryCount, 0, 10);
             
             settings.rotationRange.x = Mathf.Clamp(settings.rotationRange.x, 0f, 360f);
             settings.rotationRange.y = Mathf.Clamp(settings.rotationRange.y, 0f, 360f);
@@ -120,17 +141,18 @@ namespace NeonImperium.WorldGeneration
             if (settings.objectsPerClusterRange.x > settings.objectsPerClusterRange.y)
                 settings.objectsPerClusterRange.x = settings.objectsPerClusterRange.y;
             
-            placementStrategy = new RandomPlacement();
+            if (placementStrategy == null)
+                placementStrategy = new RandomPlacement();
         }
 
-        #if UNITY_EDITOR
+#if UNITY_EDITOR
         private void OnDrawGizmosSelected()
         {
             Gizmos.matrix = transform.localToWorldMatrix;
             Gizmos.color = settings.gizmoColor;
             Gizmos.DrawWireCube(Vector3.zero, settings.dimensions);
             
-            Color transparentColor = new Color(settings.gizmoColor.r, settings.gizmoColor.g, 
+            Color transparentColor = new(settings.gizmoColor.r, settings.gizmoColor.g, 
                                           settings.gizmoColor.b, 0.1f);
             Gizmos.color = transparentColor;
             Gizmos.DrawCube(Vector3.zero, settings.dimensions);
@@ -160,7 +182,7 @@ namespace NeonImperium.WorldGeneration
                         Gizmos.color = new Color(0, 1, 0, 0.3f);
                         Gizmos.DrawSphere(worldCenter, cluster.radius);
                         
-                        GUIStyle labelStyle = new GUIStyle();
+                        GUIStyle labelStyle = new();
                         labelStyle.normal.textColor = Color.white;
                         labelStyle.fontSize = 10;
                         labelStyle.alignment = TextAnchor.MiddleCenter;
@@ -175,7 +197,7 @@ namespace NeonImperium.WorldGeneration
                         Gizmos.color = new Color(0.5f, 0.5f, 0.5f, 0.3f);
                         Gizmos.DrawSphere(worldCenter, cluster.radius);
                         
-                        GUIStyle labelStyle = new GUIStyle();
+                        GUIStyle labelStyle = new();
                         labelStyle.normal.textColor = Color.gray;
                         labelStyle.fontSize = 10;
                         labelStyle.alignment = TextAnchor.MiddleCenter;
@@ -186,9 +208,10 @@ namespace NeonImperium.WorldGeneration
                 }
             }
         }
+#endif
 
         [ContextMenu("Generate Objects")]
-        public void GenerateObjects()
+        public void Generate()
         {
             if (generationInProgress) return;
 
@@ -203,19 +226,48 @@ namespace NeonImperium.WorldGeneration
                 Debug.LogError("Collision Mask не настроен!", this);
                 return;
             }
+
+            if (placementStrategy == null)
+                placementStrategy = new RandomPlacement();
             
             ClearAll();
-            SceneView.duringSceneGui += OnSceneGUI;
-            
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                EditorApplication.update += AsyncGenerationUpdate;
+                SceneView.duringSceneGui += OnSceneGUI;
+                generationInProgress = true;
+                return;
+            }
+#endif
+
             if (Application.isPlaying)
             {
                 generationCoroutine = StartCoroutine(GenerateObjectsAsync());
             }
-            else
+        }
+
+        public IEnumerator GenerateCoroutine()
+        {
+            if (generationInProgress) yield break;
+
+            if (settings.prefabs.Length == 0)
             {
-                EditorApplication.update += AsyncGenerationUpdate;
-                generationInProgress = true;
+                Debug.LogError("Префаб не настроен!", this);
+                yield break;
             }
+
+            if (settings.collisionMask.value == 0)
+            {
+                Debug.LogError("Collision Mask не настроен!", this);
+                yield break;
+            }
+
+            placementStrategy ??= new RandomPlacement();
+
+            ClearAll();
+            yield return GenerateObjectsAsync();
         }
 
         [ContextMenu("Clear Objects")]
@@ -229,6 +281,7 @@ namespace NeonImperium.WorldGeneration
             totalPlacementAttempts = 0;
             clusters = null;
             totalObjectsPlacedInClusters = 0;
+            runtimeRetryCount = 0;
             ClearDebugRays();
             FailureStatistics.Clear();
         }
@@ -238,27 +291,80 @@ namespace NeonImperium.WorldGeneration
             if (generationCoroutine != null) StopCoroutine(generationCoroutine);
             generationCoroutine = null;
             
+#if UNITY_EDITOR
             EditorApplication.update -= AsyncGenerationUpdate;
             SceneView.duringSceneGui -= OnSceneGUI;
+#endif
             generationInProgress = false;
         }
 
         private IEnumerator GenerateObjectsAsync()
         {
             generationInProgress = true;
-            placementCache = new List<PlacementData>(settings.population);
-            FailureStatistics.Clear();
-            
-            while (placementCache.Count < settings.population)
+            runtimeRetryCount = 0;
+            bool completed = false;
+
+            while (!completed && runtimeRetryCount < settings.runtimeRetryCount + 1) // +1 для первой попытки
             {
-                int pointsToGenerate = Mathf.Min(PlacementAttemptsPerFrame, 
-                    settings.population - placementCache.Count);
-                GeneratePlacementPointsBatch(pointsToGenerate);
-                yield return null;
+                // Инициализация для текущей попытки
+                placementCache = new List<PlacementData>(settings.population);
+                totalPlacementAttempts = 0;
+                FailureStatistics.Clear();
+                clusters = null;
+                totalObjectsPlacedInClusters = 0;
+                ClearDebugRays();
+
+                while (placementCache.Count < settings.population)
+                {
+                    // Проверка лимита попыток только в рантайме
+                    if (Application.isPlaying && totalPlacementAttempts >= settings.runtimeMaxAttempts)
+                    {
+                        Debug.LogWarning($"[{name}] Достигнут лимит попыток ({settings.runtimeMaxAttempts}), прерываем попытку генерации.");
+                        break;
+                    }
+
+                    int pointsToGenerate = Mathf.Min(PlacementAttemptsPerFrame, 
+                        settings.population - placementCache.Count);
+                    GeneratePlacementPointsBatch(pointsToGenerate);
+                    yield return null;
+                }
+
+                // Проверяем, достигли ли цели
+                if (placementCache.Count >= settings.population)
+                {
+                    completed = true;
+                    break;
+                }
+                else
+                {
+                    // Не достигли, увеличиваем счётчик перезапусков
+                    runtimeRetryCount++;
+                    if (runtimeRetryCount < settings.runtimeRetryCount + 1)
+                    {
+                        Debug.Log($"[{name}] Попытка {runtimeRetryCount} не достигла цели, перезапуск...");
+                        // Очищаем кэш и статистику перед следующим циклом (уже сделано в начале)
+                        continue;
+                    }
+                    else
+                    {
+                        // Исчерпали все перезапуски
+                        Debug.LogWarning($"[{name}] Исчерпаны все попытки перезапуска ({settings.runtimeRetryCount}). Генерация завершена с {placementCache.Count} объектами.");
+                        completed = true;
+                        break;
+                    }
+                }
             }
-            
+
+            // Создаём объекты из того, что есть в кэше
             CreateObjectsFromPlacementData();
             CallGenerationCompleteExtensions();
+            OnGenerationComplete?.Invoke();
+
+            if (settings.destroyAfterGeneration && Application.isPlaying)
+            {
+                Destroy(this);
+            }
+
             generationInProgress = false;
         }
 
@@ -492,9 +598,15 @@ namespace NeonImperium.WorldGeneration
                 PlacementData data = placementCache[i];
                 if (!data.isValid || data.prefab == null) continue;
                 
-                GameObject newObj = Application.isPlaying ? 
-                    Instantiate(data.prefab, transform) : 
-                    (GameObject)PrefabUtility.InstantiatePrefab(data.prefab, transform);
+                GameObject newObj;
+#if UNITY_EDITOR
+                if (Application.isPlaying)
+                    newObj = Instantiate(data.prefab, transform);
+                else
+                    newObj = (GameObject)PrefabUtility.InstantiatePrefab(data.prefab, transform);
+#else
+                newObj = Instantiate(data.prefab, transform);
+#endif
                 
                 newObj.transform.SetPositionAndRotation(data.position, data.rotation);
                 newObj.transform.localScale = data.scale;
@@ -565,6 +677,7 @@ namespace NeonImperium.WorldGeneration
             }
         }
 
+#if UNITY_EDITOR
         private void AsyncGenerationUpdate()
         {
             if (!generationInProgress) return;
@@ -577,6 +690,7 @@ namespace NeonImperium.WorldGeneration
             {
                 CreateObjectsFromPlacementData();
                 CallGenerationCompleteExtensions();
+                OnGenerationComplete?.Invoke();
                 StopGeneration();
             }
             SceneView.RepaintAll();
@@ -587,6 +701,6 @@ namespace NeonImperium.WorldGeneration
             if (generationInProgress) sceneView.Repaint();
             else SceneView.duringSceneGui -= OnSceneGUI;
         }
-        #endif
+#endif
     }
 }

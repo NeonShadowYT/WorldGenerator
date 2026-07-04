@@ -14,6 +14,7 @@ namespace NeonImperium.WorldGeneration
         InvalidLayer,
         OutOfBounds,
         TooCloseToOther,
-        ClusterFailed
+        ClusterFailed,
+        NoNavMesh 
     }
 }
