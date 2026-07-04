@@ -127,7 +127,7 @@ namespace NeonImperium.WorldGeneration
 
         public void RegenerateAllSpawners()
         {
-            _allSpawners = new List<WorldGeneration>(FindObjectsByType<WorldGeneration>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+            _allSpawners = new List<WorldGeneration>(FindObjectsByType<WorldGeneration>(FindObjectsInactive.Include));
             
             for (int i = 0; i < _allSpawners.Count - 1; i++)
             {
