@@ -74,6 +74,7 @@ namespace NeonImperium.WorldGeneration
                     DrawPropertyWithHelp(settings, "collisionMask", "Слои для поиска поверхности. Отметьте ТОЛЬКО те слои, которые должны считаться валидной поверхностью.");
                     DrawPropertyWithHelp(settings, "avoidMask", "Слои-препятствия. Отметьте слои, которые должны блокировать размещение объектов.");
                     DrawPropertyWithHelp(settings, "alignToSurface", "Автоматически выравнивать объекты по нормали поверхности.");
+                    DrawPropertyWithHelp(settings, "maxSurfaceAngle", "Максимальный допустимый угол наклона поверхности (в градусах). 0 = отключить проверку.");
                     DrawPropertyWithHelp(settings, "maxPlacementAttempts", "Максимальное количество попыток размещения одного объекта перед отказом.");
                 }
                 EditorGUILayout.EndVertical();
@@ -181,6 +182,13 @@ namespace NeonImperium.WorldGeneration
             {
                 EditorGUILayout.BeginVertical("box");
                 DrawPropertyWithHelp(settings, "rayCastType", "Тип луча для обнаружения поверхности:\n• Ray - обычный луч (точечный)\n• Sphere - сферический луч (объемный)");
+                
+                SerializedProperty rayCastTypeProp = settings.FindPropertyRelative("rayCastType");
+                if (rayCastTypeProp != null && (RayCastType)rayCastTypeProp.enumValueIndex == RayCastType.Sphere)
+                {
+                    DrawPropertyWithHelp(settings, "raySphereRadius", "Радиус сферы при использовании SphereCast.");
+                }
+                
                 DrawPropertyWithHelp(settings, "rayOriginType", "Точка испускания лучей:\n• TopFace - с верхней грани (стандартный)\n• SideFaces - со случайной боковой грани\n• InsideVolume - из случайной точки внутри объема");
                 DrawPropertyWithHelp(settings, "maxRayAngle", "Угол отклонения луча от вертикали:\n• (0,0) - строго вертикально вниз\n• (5,15) - небольшой случайный разброс\n• (30,60) - для сложных поверхностей");
                 EditorGUILayout.EndVertical();
@@ -325,7 +333,7 @@ namespace NeonImperium.WorldGeneration
                         "• <b>destroyAfterGeneration</b> – удаляет компонент после генерации, освобождая память.\n" +
                         "• <b>runtimeMaxAttempts</b> – лимит попыток, после которого попытка прерывается.\n" +
                         "• <b>runtimeRetryCount</b> – количество дополнительных попыток, если цель не достигнута.\n" +
-                        "• <b>Вручную</b> можно запустить генерацию через <b>spawner.Generate()</b> или корутину <b>spawner.GenerateCoroutine()</b>.",
+                        "• <b>Вручную</b> можно запустить генерацию через <b>spawner.Generate()</b> или <b>spawner.GenerateAsync()</b> (Awaitable).",
                         _styleManager.MiniLabelStyle);
                     EditorGUILayout.EndVertical();
                 }

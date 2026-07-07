@@ -1,5 +1,4 @@
 #if UNITY_EDITOR
-
 namespace NeonImperium.WorldGeneration
 {
     public static class EditorFoldoutState

@@ -1,13 +1,14 @@
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
+using System.Collections.Generic;
 
 namespace NeonImperium.WorldGeneration
 {
     public class ActionButtonsDrawer
     {
         public void DrawActionButtons(WorldGenerationView view, Object[] targets, 
-            ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref System.Collections.Generic.List<WorldGeneration> allSpawners)
+            ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref List<WorldGeneration> allSpawners)
         {
             bool anyGenerating = false;
             bool anyHaveObjects = false;

@@ -19,19 +19,16 @@ namespace NeonImperium.WorldGeneration
                 
                 EditorGUI.BeginChangeCheck();
                 
-                // Первая строка: основная метка с текущими значениями
                 Rect labelRect = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
                 string displayText = $"{label.text} ({min.ToString(rangeAttribute.Format)} - {max.ToString(rangeAttribute.Format)})";
                 EditorGUI.LabelField(labelRect, displayText);
                 
-                // Вторая строка: поля ввода
                 Rect minRect = new Rect(position.x, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
                 Rect maxRect = new Rect(position.x + position.width / 2 + 5, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
                 
                 min = EditorGUI.FloatField(minRect, min);
                 max = EditorGUI.FloatField(maxRect, max);
                 
-                // Третья строка: слайдер
                 Rect sliderRect = new Rect(position.x, position.y + 40, position.width, EditorGUIUtility.singleLineHeight);
                 EditorGUI.MinMaxSlider(sliderRect, ref min, ref max, rangeAttribute.Min, rangeAttribute.Max);
                 
@@ -70,19 +67,16 @@ namespace NeonImperium.WorldGeneration
                 
                 EditorGUI.BeginChangeCheck();
                 
-                // Первая строка: основная метка с текущими значениями
                 Rect labelRect = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
                 string displayText = $"{label.text} ({min} - {max})";
                 EditorGUI.LabelField(labelRect, displayText);
                 
-                // Вторая строка: поля ввода
                 Rect minRect = new Rect(position.x, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
                 Rect maxRect = new Rect(position.x + position.width / 2 + 5, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
                 
                 min = EditorGUI.IntField(minRect, min);
                 max = EditorGUI.IntField(maxRect, max);
                 
-                // Третья строка: слайдер
                 float minFloat = min;
                 float maxFloat = max;
                 Rect sliderRect = new Rect(position.x, position.y + 40, position.width, EditorGUIUtility.singleLineHeight);

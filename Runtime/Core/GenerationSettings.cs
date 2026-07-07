@@ -57,6 +57,9 @@ namespace NeonImperium.WorldGeneration
         [Tooltip("Тип луча для обнаружения поверхности:\n- Ray: обычный луч\n- Sphere: сферический луч (толще)")]
         public RayCastType rayCastType = RayCastType.Ray;
         
+        [Tooltip("Радиус сферы при использовании SphereCast (только если rayCastType = Sphere).")]
+        [Min(0f)] public float raySphereRadius = 1f;
+        
         [Tooltip("Максимальный случайный угол отклонения луча от вертикали в градусах. (0,0) = строго вертикально вниз.")]
         [MinMaxRange(0f, 90f, "F0")] public Vector2 maxRayAngle = Vector2.zero;
         
@@ -131,6 +134,9 @@ namespace NeonImperium.WorldGeneration
 
         [Tooltip("Корректировать позицию на ближайшую точку NavMesh (если точка не на NavMesh, но рядом).")]
         public bool snapToNavMesh = false;
+
+        [Tooltip("Максимально допустимый угол наклона поверхности (в градусах) для размещения. 0 = отключить проверку.")]
+        [Range(0f, 90f)] public float maxSurfaceAngle = 45f;
     }
 
     [System.Serializable]
