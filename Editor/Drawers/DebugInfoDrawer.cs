@@ -4,7 +4,7 @@ using UnityEditor;
 using System.Collections.Generic;
 using UnityEditor.SceneManagement;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     public class DebugInfoDrawer
     {
@@ -16,7 +16,13 @@ namespace NeonImperium.WorldGeneration
 
             EditorGUILayout.BeginVertical("box");
                 
-            showDebugInfo = EditorGUILayout.Foldout(showDebugInfo, "📊 Дебаг информация", styleManager.FoldoutStyle);
+            // Rich Text для первого Foldout
+            Color textColor = styleManager.CurrentHeaderColor;
+            string colorHex = ColorUtility.ToHtmlStringRGB(textColor);
+            string displayName = $"📊 <color=#{colorHex}>Дебаг информация</color>";
+            GUIContent contentLabel = new GUIContent(displayName);
+            
+            showDebugInfo = EditorGUILayout.Foldout(showDebugInfo, contentLabel, styleManager.FoldoutStyle);
             
             if (showDebugInfo)
             {
@@ -89,7 +95,8 @@ namespace NeonImperium.WorldGeneration
                                 
                                 if (topReason.Key == FailureReasonType.EdgeCheck)
                                 {
-                                    EditorGUILayout.HelpBox(
+                                    EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                                    EditorGUILayout.LabelField(
                                         $"⚠️ <b>ОСНОВНАЯ ПРОБЛЕМА: СТРОГАЯ ПРОВЕРКА СТАБИЛЬНОСТИ</b>\n" +
                                         $"Обнаружено {topReason.Value} отказов из-за неровной поверхности.\n\n" +
                                         $"💡 <b>Рекомендации:</b>\n" +
@@ -97,15 +104,20 @@ namespace NeonImperium.WorldGeneration
                                         $"• Увеличьте maxHeightDifference до 0.3-0.5 метра\n" +
                                         $"• Уменьшите stabilityCheckRays до 4 для скорости\n" +
                                         $"• Или отключите проверку стабильности (edgeCheckRadius = 0)",
-                                        MessageType.Warning);
+                                        styleManager.MiniLabelStyle
+                                    );
+                                    EditorGUILayout.EndVertical();
                                 }
                                 else if (efficiency <= 0.025f)
                                 {
-                                    EditorGUILayout.HelpBox(
+                                    EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                                    EditorGUILayout.LabelField(
                                         $"⚠️ <b>Спавнер не эффективен. Основная причина:</b>\n" +
                                         $"{GetFailureReasonName(topReason.Key)}\n" +
                                         $"💡 <b>Рекомендация:</b> {advice}",
-                                        MessageType.Warning);
+                                        styleManager.MiniLabelStyle
+                                    );
+                                    EditorGUILayout.EndVertical();
                                 }
                             }
                         }
@@ -113,24 +125,31 @@ namespace NeonImperium.WorldGeneration
                     else if (efficiency <= 0.025f)
                     {
                         EditorGUILayout.Space(3f);
-                        EditorGUILayout.HelpBox(
+                        EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                        EditorGUILayout.LabelField(
                             "⚠️ <b>Спавнер не эффективен. Рекомендации:</b>\n" +
                             "• Уменьшите avoidanceRadius и minDistanceBetweenObjects\n" +
                             "• Увеличить зону спавна\n" +
                             "• Проверить настройки collisionMask и avoidMask\n" +
                             "• Ослабить проверки стабильности поверхности",
-                            MessageType.Warning);
+                            styleManager.MiniLabelStyle
+                        );
+                        EditorGUILayout.EndVertical();
                     }
 
                     if (efficiency > 0.7f)
                     {
                         EditorGUILayout.Space(3f);
-                        EditorGUILayout.HelpBox("✅ <b>Отличная эффективность!</b> Настройки оптимальны.", MessageType.Info);
+                        EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                        EditorGUILayout.LabelField("✅ <b>Отличная эффективность!</b> Настройки оптимальны.", styleManager.MiniLabelStyle);
+                        EditorGUILayout.EndVertical();
                     }
                     else if (efficiency > 0.3f)
                     {
                         EditorGUILayout.Space(3f);
-                        EditorGUILayout.HelpBox("⚠️ <b>Средняя эффективность.</b> Можно улучшить настройки.", MessageType.Info);
+                        EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                        EditorGUILayout.LabelField("⚠️ <b>Средняя эффективность.</b> Можно улучшить настройки.", styleManager.MiniLabelStyle);
+                        EditorGUILayout.EndVertical();
                     }
                 }
 
@@ -172,12 +191,15 @@ namespace NeonImperium.WorldGeneration
                     if (clusterCount < spawner.settings.clusterCount)
                     {
                         EditorGUILayout.Space(3f);
-                        EditorGUILayout.HelpBox(
+                        EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                        EditorGUILayout.LabelField(
                             "⚠️ <b>Не удалось создать все кластеры. Решения:</b>\n" +
                             "• Увеличить размер зоны спавна\n" +
                             "• Уменьшить minDistanceBetweenClusters\n" +
                             "• Уменьшить clusterCount",
-                            MessageType.Warning);
+                            styleManager.MiniLabelStyle
+                        );
+                        EditorGUILayout.EndVertical();
                     }
                 }
 
@@ -195,7 +217,13 @@ namespace NeonImperium.WorldGeneration
         {
             EditorGUILayout.BeginVertical("box");
             
-            showDebugRaySettings = EditorGUILayout.Foldout(showDebugRaySettings, "🔦 Настройки отображения лучей", styleManager.FoldoutStyle);
+            // Rich Text для второго Foldout
+            Color textColor = styleManager.CurrentHeaderColor;
+            string colorHex = ColorUtility.ToHtmlStringRGB(textColor);
+            string displayName = $"🔦 <color=#{colorHex}>Настройки отображения лучей</color>";
+            GUIContent contentLabel = new GUIContent(displayName);
+            
+            showDebugRaySettings = EditorGUILayout.Foldout(showDebugRaySettings, contentLabel, styleManager.FoldoutStyle);
             
             if (showDebugRaySettings)
             {

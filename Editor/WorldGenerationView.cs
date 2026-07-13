@@ -4,7 +4,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using System.Collections.Generic;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     [CustomEditor(typeof(WorldGeneration))]
     [CanEditMultipleObjects]
@@ -47,7 +47,7 @@ namespace NeonImperium.WorldGeneration
             DrawHeaders();
             DrawDisplaySettings();
             DrawSettings();
-            _actionDrawer.DrawActionButtons(this, targets, ref _isRegeneratingAll, ref _currentSpawnerIndex, ref _totalSpawners, ref _allSpawners);
+            _actionDrawer.DrawActionButtons(this, targets, ref _isRegeneratingAll, ref _currentSpawnerIndex, ref _totalSpawners, ref _allSpawners, _styleManager);
             _debugDrawer.DrawDebugInfo(target as WorldGeneration, ref _showDebugInfo, _styleManager);
 
             serializedObject.ApplyModifiedProperties();

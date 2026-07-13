@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEditor;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     public class EditorStyleManager
     {
@@ -13,6 +13,7 @@ namespace NeonImperium.WorldGeneration
         public GUIStyle HelpBoxStyle { get; private set; }
         public GUIStyle MiniLabelStyle { get; private set; }
         public Texture2D SolidColorTexture { get; private set; }
+        public Color CurrentHeaderColor { get; private set; }
 
         public void InitializeStyles()
         {
@@ -44,7 +45,8 @@ namespace NeonImperium.WorldGeneration
             FoldoutStyle ??= new GUIStyle(EditorStyles.foldout)
             {
                 fontStyle = FontStyle.Bold,
-                fontSize = 12
+                fontSize = 12,
+                richText = true
             };
 
             HelpBoxStyle ??= new GUIStyle(EditorStyles.helpBox)
@@ -67,14 +69,17 @@ namespace NeonImperium.WorldGeneration
 
         public void UpdateStyles(Color headerColor)
         {
+            CurrentHeaderColor = headerColor;
+
             if (SolidColorTexture == null) SolidColorTexture = new Texture2D(1, 1);
-            
             Color bgColor = new(headerColor.r, headerColor.g, headerColor.b, 0.2f);
             SolidColorTexture.SetPixel(0, 0, bgColor);
             SolidColorTexture.Apply();
-            
+
             HeaderStyle.normal.textColor = headerColor;
-            FoldoutStyle.normal.textColor = Color.Lerp(headerColor, Color.white, 0.1f);
+            HeaderStyle.hover.textColor = headerColor;
+            HeaderStyle.active.textColor = headerColor;
+            HeaderStyle.focused.textColor = headerColor;
         }
     }
 }

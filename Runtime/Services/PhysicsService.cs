@@ -1,7 +1,7 @@
 // PhysicsService.cs
 using UnityEngine;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     public class PhysicsService : IPhysicsService
     {

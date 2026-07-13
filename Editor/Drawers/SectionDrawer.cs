@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEditor;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     public class SectionDrawer
     {
@@ -15,7 +15,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawSpawnSettings(SerializedProperty settings, bool showHelpBoxes, UnityEngine.Object[] targets, WorldGeneration spawner)
         {
-            EditorFoldoutState.SpawnSettings = DrawSection("⚙️ Основные настройки", EditorFoldoutState.SpawnSettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.SpawnSettings = DrawSection("⚙️", "Основные настройки", EditorFoldoutState.SpawnSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 {
@@ -119,10 +120,10 @@ namespace NeonImperium.WorldGeneration
                 {
                     EditorGUILayout.Space(4f);
                     EditorGUILayout.BeginVertical("box");
-                    EditorGUILayout.HelpBox(
+                    EditorGUILayout.LabelField(
                         "⚠️ <b>ВНИМАНИЕ:</b> Avoid Mask содержит слои, не включенные в Collision Mask!\n" +
                         "Это может привести к непредсказуемому поведению.",
-                        MessageType.Warning
+                        _styleManager.MiniLabelStyle
                     );
                     
                     if (GUILayout.Button("🔧 Автоисправление: Добавить слои Avoid в Collision"))
@@ -142,7 +143,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawClusteringSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
-            EditorFoldoutState.ClusteringSettings = DrawSection("🌳 Кластеризация", EditorFoldoutState.ClusteringSettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.ClusteringSettings = DrawSection("🌳", "Кластеризация", EditorFoldoutState.ClusteringSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 SerializedProperty useClustering = settings.FindPropertyRelative("useClustering");
@@ -178,7 +180,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawRaySettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
-            EditorFoldoutState.RaySettings = DrawSection("🔦 Настройки луча", EditorFoldoutState.RaySettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.RaySettings = DrawSection("🔦", "Настройки луча", EditorFoldoutState.RaySettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 DrawPropertyWithHelp(settings, "rayCastType", "Тип луча для обнаружения поверхности:\n• Ray - обычный луч (точечный)\n• Sphere - сферический луч (объемный)");
@@ -206,7 +209,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawStabilitySettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
-            EditorFoldoutState.StabilitySettings = DrawSection("📊 Проверка ровности поверхности", EditorFoldoutState.StabilitySettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.StabilitySettings = DrawSection("📊", "Проверка ровности поверхности", EditorFoldoutState.StabilitySettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 SerializedProperty edgeCheckRadius = settings.FindPropertyRelative("edgeCheckRadius");
@@ -271,7 +275,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawAvoidanceSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
-            EditorFoldoutState.AvoidanceSettings = DrawSection("🚫 Избегание препятствий", EditorFoldoutState.AvoidanceSettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.AvoidanceSettings = DrawSection("🚫", "Избегание препятствий", EditorFoldoutState.AvoidanceSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 DrawPropertyWithHelp(settings, "checkCeiling", "Проверять наличие препятствий над точкой размещения.");
@@ -307,7 +312,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawRuntimeSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
-            EditorFoldoutState.RuntimeSettings = DrawSection("⚡ Настройки Runtime", EditorFoldoutState.RuntimeSettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.RuntimeSettings = DrawSection("⚡", "Настройки Runtime", EditorFoldoutState.RuntimeSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 DrawPropertyWithHelp(settings, "enableRuntimeGeneration", "Разрешить работу генератора в собранной игре (Runtime). Если отключено, компонент будет уничтожен при старте.");
@@ -342,7 +348,8 @@ namespace NeonImperium.WorldGeneration
 
         public void DrawNavMeshSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
-            EditorFoldoutState.NavMeshSettings = DrawSection("🧭 NavMesh", EditorFoldoutState.NavMeshSettings, spawner, () =>
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.NavMeshSettings = DrawSection("🧭", "NavMesh", EditorFoldoutState.NavMeshSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 DrawPropertyWithHelp(settings, "useNavMeshCheck", "Проверять, что точка размещения находится на NavMesh (требуется система NavMesh).");
@@ -369,11 +376,16 @@ namespace NeonImperium.WorldGeneration
             });
         }
 
-        private bool DrawSection(string title, bool showState, WorldGeneration spawner, System.Action content)
+        private bool DrawSection(string emoji, string title, bool showState, Color textColor, WorldGeneration spawner, System.Action content)
         {
             EditorGUILayout.BeginVertical("box");
             
-            bool newState = EditorGUILayout.Foldout(showState, title, _styleManager.FoldoutStyle);
+            // Формируем строку с Rich Text: эмодзи без тега (будут белыми), текст окрашен
+            string colorHex = ColorUtility.ToHtmlStringRGB(textColor);
+            string displayName = $"{emoji} <color=#{colorHex}>{title}</color>";
+            GUIContent contentLabel = new GUIContent(displayName);
+            
+            bool newState = EditorGUILayout.Foldout(showState, contentLabel, _styleManager.FoldoutStyle);
             
             if (newState != showState)
             {

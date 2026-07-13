@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEditor;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     [CustomPropertyDrawer(typeof(MinMaxRangeAttribute))]
     public class MinMaxRangeDrawer : PropertyDrawer

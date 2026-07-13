@@ -1,11 +1,13 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System;
+using System.Threading.Tasks;
+
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     [ExecuteInEditMode]
     public class WorldGeneration : MonoBehaviour
@@ -31,7 +33,7 @@ namespace NeonImperium.WorldGeneration
 
         public event Action OnGenerationComplete;
 
-        [SerializeField, HideInInspector] private List<PlacementData> _placementCache = new();
+        [HideInInspector] private List<PlacementData> _placementCache = new();
         [SerializeField, HideInInspector] private int _totalPlacementAttempts;
 
         public Dictionary<FailureReasonType, int> FailureStatistics { get; private set; } = new();
@@ -223,8 +225,8 @@ namespace NeonImperium.WorldGeneration
                 return;
             }
 
-            EnsureModulesInitialized();
             ClearAll();
+            EnsureModulesInitialized();
 
 #if UNITY_EDITOR
             if (!Application.isPlaying)
@@ -232,6 +234,7 @@ namespace NeonImperium.WorldGeneration
                 EditorApplication.update += AsyncGenerationUpdate;
                 SceneView.duringSceneGui += OnSceneGUI;
                 _generationInProgress = true;
+                Debug.Log($"[{name}] Запущена генерация в редакторе (асинхронно).");
                 return;
             }
 #endif
@@ -255,12 +258,18 @@ namespace NeonImperium.WorldGeneration
                 Debug.LogError("Collision Mask не настроен!", this);
                 return;
             }
-            EnsureModulesInitialized();
+
             ClearAll();
+            EnsureModulesInitialized();
 
             _generationInProgress = true;
             _runtimeRetryCount = 0;
             bool completed = false;
+
+            
+#if UNITY_EDITOR
+            Debug.Log($"[{name}] Начинается генерация (Runtime). Seed: {(_seed != 0 ? _seed.ToString() : "случайный")}");
+#endif
 
             while (!completed && _runtimeRetryCount < settings.runtimeRetryCount + 1)
             {
@@ -268,7 +277,12 @@ namespace NeonImperium.WorldGeneration
                 _totalPlacementAttempts = 0;
                 FailureStatistics.Clear();
                 ClearDebugRays();
-                ResetModulesState();
+                
+                if (_runtimeRetryCount > 0)
+                {
+                    _modulesInitialized = false;
+                    EnsureModulesInitialized();
+                }
 
                 while (_placementCache.Count < settings.population && (_pointGenerator.HasMorePoints() || !settings.useClustering))
                 {
@@ -305,7 +319,7 @@ namespace NeonImperium.WorldGeneration
                 }
             }
 
-            CreateObjectsFromPlacementData();
+            await CreateObjectsFromPlacementData();
             CallGenerationCompleteExtensions();
             OnGenerationComplete?.Invoke();
 
@@ -313,6 +327,7 @@ namespace NeonImperium.WorldGeneration
                 Destroy(this);
 
             _generationInProgress = false;
+            Debug.Log($"[{name}] Генерация завершена. Создано объектов: {transform.childCount}");
         }
 
         private void GeneratePlacementPointsBatch(int desiredCount)
@@ -354,12 +369,13 @@ namespace NeonImperium.WorldGeneration
             }
         }
 
-        private void CreateObjectsFromPlacementData()
+        private async Task CreateObjectsFromPlacementData()
         {
             bool wasActive = gameObject.activeSelf;
             if (Application.isPlaying)
             {
                 gameObject.SetActive(false);
+                await Awaitable.NextFrameAsync();
             }
 
             int objectsToCreate = Mathf.Min(_placementCache.Count, settings.population);
@@ -477,7 +493,7 @@ namespace NeonImperium.WorldGeneration
         }
 
 #if UNITY_EDITOR
-        private void AsyncGenerationUpdate()
+        private async void AsyncGenerationUpdate()
         {
             if (!_generationInProgress) return;
             EnsureModulesInitialized();
@@ -493,10 +509,11 @@ namespace NeonImperium.WorldGeneration
             }
             else
             {
-                CreateObjectsFromPlacementData();
+                await CreateObjectsFromPlacementData();
                 CallGenerationCompleteExtensions();
                 OnGenerationComplete?.Invoke();
                 StopGeneration();
+                Debug.Log($"[{name}] Генерация в редакторе завершена. Создано объектов: {transform.childCount}");
             }
             SceneView.RepaintAll();
         }

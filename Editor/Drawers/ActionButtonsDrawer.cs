@@ -3,12 +3,13 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     public class ActionButtonsDrawer
     {
         public void DrawActionButtons(WorldGenerationView view, Object[] targets, 
-            ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref List<WorldGeneration> allSpawners)
+            ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref List<WorldGeneration> allSpawners,
+            EditorStyleManager styleManager)
         {
             bool anyGenerating = false;
             bool anyHaveObjects = false;
@@ -29,10 +30,17 @@ namespace NeonImperium.WorldGeneration
             if (masksConflict)
             {
                 EditorGUILayout.BeginVertical("box");
-                EditorGUILayout.HelpBox(
+                // Кастомный блок с rich-текстом вместо HelpBox
+                GUIStyle labelStyle = new(EditorStyles.label)
+                {
+                    wordWrap = true,
+                    richText = true,
+                    fontSize = 11
+                };
+                EditorGUILayout.LabelField(
                     "🚫 <b>Невозможно сгенерировать: полный конфликт масок!</b>\n" +
                     "Collision Mask и Avoid Mask содержат одинаковые слои.",
-                    MessageType.Error
+                    labelStyle
                 );
                 EditorGUILayout.EndVertical();
                 GUI.enabled = false;

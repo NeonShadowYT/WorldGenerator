@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace NeonImperium.WorldGeneration
+namespace NeonImperium.WorldGenerations
 {
     public enum GenerationAlgorithmType { Standard }
     public enum RayOriginType { TopFace, SideFaces, InsideVolume }
