@@ -224,6 +224,8 @@ If this tool saved you time - drop a star on GitHub. It helps other devs find us
 | [![Neon Imperium](https://img.shields.io/badge/Neon%20Imperium-2d2f48?style=for-the-badge&logo=github&logoColor=white)](https://github.com/NeonShadowYT/NeonImperium) | Open-source website for Starve Neon - HTML/CSS/JS, feel free to peek and reuse. |
 
 <div align="center">
+
+[![Starve Neon](https://raw.githubusercontent.com/NeonShadowYT/NeonShadowYT/main/images/banner-development.gif)](https://neonshadowyt.github.io/NeonImperium/starve-neon)
    
 ### 📸 Join the Community
   
