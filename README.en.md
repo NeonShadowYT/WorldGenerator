@@ -240,6 +240,4 @@ If this tool saved you time - drop a star on GitHub. It helps other devs find us
    
 **Made with ❤️ for those who build worlds**
 
-*Neon Shadow & DeepSeek*
-
 </div>
