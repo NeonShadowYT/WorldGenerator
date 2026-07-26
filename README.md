@@ -21,7 +21,7 @@
 
 <div align="center">
    
-<img alt="World Generator Interface" src="https://github.com/user-attachments/assets/0c358a40-3689-45db-bd43-63897907064c" />
+<img width="700" alt="World Generator Interface" src="https://github.com/user-attachments/assets/0c358a40-3689-45db-bd43-63897907064c" />
 
 </div>
 
@@ -42,7 +42,7 @@
 
 <div align="center">
    
-<img alt="Clustering Demo" src="https://github.com/user-attachments/assets/069db7d7-d386-4d69-bac4-2c28d8ed9e7e" />
+<img width="700" alt="Clustering Demo" src="https://github.com/user-attachments/assets/069db7d7-d386-4d69-bac4-2c28d8ed9e7e" />
 
 </div>
 
@@ -94,7 +94,7 @@
 
 <div align="center">
    
-<img alt="Main Settings" src="https://github.com/user-attachments/assets/37f58624-ecc3-4868-b245-ec96e9243cd2" />
+<img width="700" alt="Main Settings" src="https://github.com/user-attachments/assets/37f58624-ecc3-4868-b245-ec96e9243cd2" />
 
 </div>
 
@@ -111,7 +111,7 @@
 
 <div align="center">
    
-<img alt="Clustering Settings" src="https://github.com/user-attachments/assets/ef19def2-7c45-4531-967e-f6eeda29ec31" />
+<img width="700" alt="Clustering Settings" src="https://github.com/user-attachments/assets/ef19def2-7c45-4531-967e-f6eeda29ec31" />
 
 </div>
 
@@ -138,7 +138,7 @@
 
 <div align="center">
    
-<img alt="Debug Visualization" src="https://github.com/user-attachments/assets/49b6b490-0823-4728-abae-57e4dc57332f" />
+<img width="700" alt="Debug Visualization" src="https://github.com/user-attachments/assets/49b6b490-0823-4728-abae-57e4dc57332f" />
 
 </div>
 
@@ -151,7 +151,7 @@
 
 <div align="center">
    
-<img alt="Debug Statistics" src="https://github.com/user-attachments/assets/18382d66-9dfc-484c-b6e1-54b17dd1a66e" />
+<img width="700" alt="Debug Statistics" src="https://github.com/user-attachments/assets/18382d66-9dfc-484c-b6e1-54b17dd1a66e" />
 
 </div>
 
