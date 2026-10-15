@@ -1,4 +1,3 @@
-// DebugLogger.cs
 using UnityEngine;
 using System.Collections.Generic;
 
@@ -6,17 +5,20 @@ namespace NeonImperium.WorldGenerations
 {
     public class DebugLogger : IDebugLogger
     {
-        private List<DebugRay> debugRays = new List<DebugRay>();
-        private DebugRaySettings settings;
+        private readonly List<DebugRay> debugRays = new List<DebugRay>(256);
+        private readonly DebugRaySettings settings;
 
         public DebugLogger(DebugRaySettings settings)
         {
             this.settings = settings;
         }
 
+        public bool Enabled => Application.isEditor && settings != null && settings.enabled;
+
         public void AddDebugRay(Vector3 start, Vector3 direction, float distance, Color color, DebugRayType rayType)
         {
-            if (!settings.enabled) return;
+            if (!Enabled) return;
+
             bool shouldDraw = rayType switch
             {
                 DebugRayType.Main => settings.showMainRays,
@@ -27,6 +29,7 @@ namespace NeonImperium.WorldGenerations
                 _ => true
             };
             if (!shouldDraw) return;
+
             debugRays.Add(new DebugRay
             {
                 start = start,
@@ -37,7 +40,6 @@ namespace NeonImperium.WorldGenerations
         }
 
         public void ClearDebugRays() => debugRays.Clear();
-
         public List<DebugRay> GetDebugRays() => debugRays;
     }
 }

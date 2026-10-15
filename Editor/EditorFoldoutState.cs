@@ -4,6 +4,7 @@ namespace NeonImperium.WorldGenerations
     public static class EditorFoldoutState
     {
         public static bool SpawnSettings = true;
+        public static bool SpawnZoneSettings = true;
         public static bool ClusteringSettings = false;
         public static bool RaySettings = false;
         public static bool StabilitySettings = false;

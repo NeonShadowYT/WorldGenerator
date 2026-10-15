@@ -1,6 +1,8 @@
 #if UNITY_EDITOR
-using UnityEngine;
+using System;
+using System.Text;
 using UnityEditor;
+using UnityEngine;
 
 namespace NeonImperium.WorldGenerations
 {
@@ -8,411 +10,575 @@ namespace NeonImperium.WorldGenerations
     {
         private readonly EditorStyleManager _styleManager;
 
-        public SectionDrawer(EditorStyleManager styleManager)
-        {
-            _styleManager = styleManager;
-        }
+        private static readonly Vector3[] _convexityBuffer = new Vector3[64];
+        private static readonly StringBuilder _concaveSb = new(160);
+        private static string _concaveCachedText;
+        private static int _concaveCachedCount = -1;
 
-        public void DrawSpawnSettings(SerializedProperty settings, bool showHelpBoxes, UnityEngine.Object[] targets, WorldGeneration spawner)
+        private static readonly float[] SnapSteps = { 0.1f, 0.5f, 1f, 2f, 5f, 0f };
+        private static readonly string[] SnapLabels = { "0.1", "0.5", "1", "2", "5", "Off" };
+        private static readonly GUIContent SnapLabelContent = new("Snap (Ctrl):",
+            "Шаг снапа при зажатом Ctrl во время drag в Scene View.");
+        private static readonly GUIContent ZoneModeContent = new("Форма зон",
+            "Box — основная зона + дополнительные боксы.\nPolygon — произвольные объёмные фигуры (3D).");
+        private static readonly GUIContent PolygonsContent = new("Полигональные зоны",
+            "Вершины в локальных координатах. position — центр ребра, verticalSize — размер по вертикали.");
+
+        public SectionDrawer(EditorStyleManager styleManager) { _styleManager = styleManager; }
+
+        // ───────────────────── Основные настройки ─────────────────────
+
+        public void DrawSpawnSettings(SerializedProperty settings, SerializedProperty seedProperty,
+            bool showHelpBoxes, UnityEngine.Object[] targets, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.SpawnSettings = DrawSection("⚙️", "Основные настройки", EditorFoldoutState.SpawnSettings, textColor, spawner, () =>
+            EditorFoldoutState.SpawnSettings = DrawSection("⚙️", "Основные настройки",
+                EditorFoldoutState.SpawnSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("🎨 Визуальные настройки", EditorStyles.boldLabel);
+                DrawRelative(settings, "gizmoColor",
+                    "Цвет отображения зоны спавна в редакторе. Не влияет на игровой процесс.");
+                DrawRelative(settings, "generationAlgorithm",
+                    "Тип алгоритма генерации объектов.");
+                DrawRelative(settings, "priority",
+                    "Приоритет генерации. Спавнеры с более высоким приоритетом генерируются первыми при полной перегенерации.");
+                DrawRelative(settings, "prefabs",
+                    "Список префабов для случайного выбора при генерации. Если пустой — генерация не работает.");
+                EditorGUILayout.EndVertical();
+
+                EditorGUILayout.Space(3f);
+
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("📏 Количество", EditorStyles.boldLabel);
+                DrawRelative(settings, "population",
+                    "Целевое количество объектов для создания. Реальное количество может быть меньше из-за ограничений размещения.");
+
+                SerializedProperty detProp = settings.FindPropertyRelative("useDeterministicSeed");
+                EditorGUILayout.PropertyField(detProp, new GUIContent(detProp.displayName,
+                    "Если включено — seed фиксирован, генерация воспроизводима между запусками.\n" +
+                    "Нужно для сетевой синхронизации, сохранений, тестов."));
+
+                if (detProp.boolValue && seedProperty != null)
                 {
-                    EditorGUILayout.LabelField("🎨 Визуальные настройки", EditorStyles.boldLabel);
-                    DrawPropertyWithHelp(settings, "gizmoColor", "Цвет зоны спавна в редакторе. Не влияет на игровой процесс.");
-                    DrawPropertyWithHelp(settings, "generationAlgorithm", "Тип алгоритма генерации объектов. Влияет на логику обработки после создания.");
-                    DrawPropertyWithHelp(settings, "priority", "Приоритет генерации. Спавнеры с более высоким приоритетом генерируются первыми при полной перегенерации.");
-                    DrawPropertyWithHelp(settings, "prefabs", "Список префабов для случайного выбора. Если пустой - генерация не работает.");
+                    EditorGUILayout.PropertyField(seedProperty, new GUIContent("Seed",
+                        $"Пользовательский seed.\n" +
+                        $"• 0 = использовать детерминированный ({SpawnSettings.DeterministicSeed}).\n" +
+                        $"• ≠ 0 = использовать введённое значение."));
                 }
                 EditorGUILayout.EndVertical();
 
                 EditorGUILayout.Space(3f);
-                
-                EditorGUILayout.BeginVertical("box");
-                {
-                    EditorGUILayout.LabelField("📏 Размеры и количество", EditorStyles.boldLabel);
-                    DrawPropertyWithHelp(settings, "dimensions", "Размеры зоны спавна:\n• X - ширина\n• Z - глубина\n• Y - высота проверки поверхности");
-                    DrawPropertyWithHelp(settings, "population", "Целевое количество объектов. Реальное количество может быть меньше из-за ограничений размещения.");
-                }
-                EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>📏 Размеры зоны спавна</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("• X,Z определяют площадь размещения\n• Y влияет на высоту проверки поверхности", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
-                }
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("👁️ Предпросмотр", EditorStyles.boldLabel);
+                DrawRelative(settings, "previewAttempts",
+                    "Количество попыток валидации в preview-режиме (без создания объектов).");
+                DrawRelative(settings, "previewValidColor",
+                    "Цвет валидной точки предпросмотра.");
+                DrawRelative(settings, "previewInvalidColor",
+                    "Цвет невалидной точки предпросмотра.");
+                DrawRelative(settings, "previewShowInvalid",
+                    "Показывать также невалидные точки в preview-режиме.");
+                EditorGUILayout.EndVertical();
 
                 EditorGUILayout.Space(3f);
-                
-                EditorGUILayout.BeginVertical("box");
-                {
-                    EditorGUILayout.LabelField("🎲 Вариации объектов", EditorStyles.boldLabel);
-                    DrawPropertyWithHelp(settings, "scaleRange", "Диапазон случайного масштаба:\n• Min - минимальный масштаб\n• Max - максимальный масштаб");
-                    DrawPropertyWithHelp(settings, "rotationRange", "Диапазон случайного вращения вокруг оси Y:\n• (0, 360) - полный случайный поворот\n• (0, 0) - без вращения");
-                    DrawPropertyWithHelp(settings, "verticalOffset", "Случайное смещение по вертикали от точки попадания:\n• X - минимальное смещение\n• Y - максимальное смещение");
-                }
-                EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>💡 Советы по вариациям</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("• <b>Scale Range:</b> Используйте (0.8, 1.2) для естественного вида\n• <b>Rotation Range:</b> (0, 360) для случайной ориентации\n• <b>Vertical Offset:</b> Корректирует высоту посадки объектов", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
-                }
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("🎲 Вариации объектов", EditorStyles.boldLabel);
+                DrawRelative(settings, "scaleRange",
+                    "Диапазон случайного масштаба объектов. (0.8, 1.2) = от 80% до 120% от оригинального размера.");
+                DrawRelative(settings, "rotationRange",
+                    "Диапазон случайного вращения вокруг оси Y в градусах. (0, 360) = полный случайный поворот.");
+                DrawRelative(settings, "verticalOffset",
+                    "Случайное смещение по вертикали от точки попадания. Полезно для корректировки высоты посадки.");
+                EditorGUILayout.EndVertical();
 
                 EditorGUILayout.Space(3f);
-                
-                EditorGUILayout.BeginVertical("box");
-                {
-                    EditorGUILayout.LabelField("🎯 Правила размещения", EditorStyles.boldLabel);
-                    DrawPropertyWithHelp(settings, "collisionMask", "Слои для поиска поверхности. Отметьте ТОЛЬКО те слои, которые должны считаться валидной поверхностью.");
-                    DrawPropertyWithHelp(settings, "avoidMask", "Слои-препятствия. Отметьте слои, которые должны блокировать размещение объектов.");
-                    DrawPropertyWithHelp(settings, "alignToSurface", "Автоматически выравнивать объекты по нормали поверхности.");
-                    DrawPropertyWithHelp(settings, "maxSurfaceAngle", "Максимальный допустимый угол наклона поверхности (в градусах). 0 = отключить проверку.");
-                    DrawPropertyWithHelp(settings, "maxPlacementAttempts", "Максимальное количество попыток размещения одного объекта перед отказом.");
-                }
-                EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>✅ СЛОИ ДЛЯ РАЗМЕЩЕНИЯ</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("Отметьте <b>ТОЛЬКО</b> те слои, которые должны считаться валидной поверхностью для размещения объектов.\n<b>Пример:</b> Ground, Terrain, Floor, Platform", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("<b>❌ СЛОИ-ПРЕПЯТСТВИЯ</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("Отметьте слои, которые должны блоклировать размещение объектов.\n<b>Пример:</b> Building, Obstacle, Water, Player", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("<b>⚙️ Рекомендации</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("• <b>Align To Surface:</b> ВКЛ для деревьев, камней, построек\n• <b>Align To Surface:</b> ВЫКЛ для вертикальных объектов, столбов\n• <b>Max Placement Attempts:</b> 10-30 для баланса скорости/качества", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
-                }
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("🎯 Правила размещения", EditorStyles.boldLabel);
+                DrawRelative(settings, "collisionMask",
+                    "Слои, по которым осуществляется поиск поверхности для размещения.\nТолько эти слои будут считаться валидной поверхностью.");
+                DrawRelative(settings, "avoidMask",
+                    "Слои, которых нужно избегать при размещении.");
+                DrawRelative(settings, "alignToSurface",
+                    "Автоматически выравнивать объекты по нормали поверхности.");
+                DrawRelative(settings, "surfaceAngleRange",
+                    "Допустимый диапазон углов наклона поверхности (градусы).\n" +
+                    "X — минимум (0 = допустима любая поверхность, включая горизонталь).\n" +
+                    "Y — максимум (0 = проверка угла отключена).\n\n" +
+                    "Примеры:\n" +
+                    "• (0, 45)    — только пологие поверхности (как раньше).\n" +
+                    "• (60, 90)   — только стены и сильные уклоны.\n" +
+                    "• (150, 180) — только потолки.\n" +
+                    "• (0, 180)   — любая поверхность.");
+                DrawRelative(settings, "maxPlacementAttempts",
+                    "Максимальное количество попыток размещения одного объекта перед отказом.");
+                EditorGUILayout.EndVertical();
 
                 EditorGUILayout.Space(3f);
-                
+
                 EditorGUILayout.BeginVertical("box");
-                {
-                    EditorGUILayout.LabelField("🔌 Расширения", EditorStyles.boldLabel);
-                    DrawPropertyWithHelp(settings, "onSpawnExtensions", "Расширения, вызываемые при создании каждого объекта.");
-                    DrawPropertyWithHelp(settings, "onGenerationCompleteExtensions", "Расширения, вызываемые после завершения генерации всех объектов.");
-                }
+                EditorGUILayout.LabelField("🔌 Расширения", EditorStyles.boldLabel);
+                DrawRelative(settings, "onSpawnExtensions",
+                    "Расширения, вызываемые при создании каждого объекта.");
+                DrawRelative(settings, "onGenerationCompleteExtensions",
+                    "Расширения, вызываемые после завершения генерации всех объектов.");
                 EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>🔌 Как использовать расширения</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("<b>1.</b> Создайте новый скрипт, наследующий от <b>WorldGenerationExtension</b>\n<b>2.</b> Реализуйте методы:\n   • <b>OnGameObjectSpawned</b> - вызывается для каждого созданного объекта\n   • <b>OnGenerationComplete</b> - вызывается один раз после всей генерации\n<b>3.</b> Добавьте компонент с этим скриптом на любой GameObject в сцене\n<b>4.</b> Перетащите его в соответствующий список расширений выше", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
-                }
-
-                int collision = settings.FindPropertyRelative("collisionMask").intValue;
-                int avoid = settings.FindPropertyRelative("avoidMask").intValue;
-                int conflictLayers = avoid & ~collision;
-
-                if (conflictLayers != 0)
-                {
-                    EditorGUILayout.Space(4f);
-                    EditorGUILayout.BeginVertical("box");
-                    EditorGUILayout.LabelField(
-                        "⚠️ <b>ВНИМАНИЕ:</b> Avoid Mask содержит слои, не включенные в Collision Mask!\n" +
-                        "Это может привести к непредсказуемому поведению.",
-                        _styleManager.MiniLabelStyle
-                    );
-                    
-                    if (GUILayout.Button("🔧 Автоисправление: Добавить слои Avoid в Collision"))
-                    {
-                        for (int i = 0; i < targets.Length; i++)
-                        {
-                            WorldGeneration tgt = targets[i] as WorldGeneration;
-                            Undo.RecordObject(tgt, "Исправить Collision Mask");
-                            tgt.settings.collisionMask.value |= conflictLayers;
-                            EditorUtility.SetDirty(tgt);
-                        }
-                    }
-                    EditorGUILayout.EndVertical();
-                }
+                DrawMaskConflictWarning(settings, targets);
             });
         }
+
+        private void DrawMaskConflictWarning(SerializedProperty settings, UnityEngine.Object[] targets)
+        {
+            int collision = settings.FindPropertyRelative("collisionMask").intValue;
+            int avoid = settings.FindPropertyRelative("avoidMask").intValue;
+            int conflictLayers = avoid & ~collision;
+            if (conflictLayers == 0) return;
+
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField(
+                "⚠️ <b>ВНИМАНИЕ:</b> Avoid Mask содержит слои, не включённые в Collision Mask!",
+                _styleManager.MiniLabelStyle);
+
+            if (GUILayout.Button("🔧 Автоисправление: Добавить слои Avoid в Collision"))
+            {
+                for (int i = 0; i < targets.Length; i++)
+                {
+                    WorldGeneration tgt = targets[i] as WorldGeneration;
+                    if (tgt == null) continue;
+                    Undo.RecordObject(tgt, "Исправить Collision Mask");
+                    LayerMask mask = tgt.settings.collisionMask;
+                    mask.value |= conflictLayers;
+                    tgt.settings.collisionMask = mask;
+                    EditorUtility.SetDirty(tgt);
+                }
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        // ───────────────────── Зоны спавна ─────────────────────
+
+        public void DrawSpawnZoneSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
+        {
+            Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
+            EditorFoldoutState.SpawnZoneSettings = DrawSection("🗺️", "Зоны спавна",
+                EditorFoldoutState.SpawnZoneSettings, textColor, spawner, () =>
+            {
+                SerializedProperty modeProp = settings.FindPropertyRelative("zoneMode");
+                EditorGUI.BeginChangeCheck();
+                EditorGUILayout.PropertyField(modeProp, ZoneModeContent);
+                bool modeChanged = EditorGUI.EndChangeCheck();
+
+                SpawnZoneMode mode = (SpawnZoneMode)modeProp.enumValueIndex;
+
+                if (modeChanged && mode == SpawnZoneMode.Polygon)
+                {
+                    SerializedProperty polys = settings.FindPropertyRelative("polygons");
+                    if (polys != null && polys.arraySize == 0)
+                    {
+                        if (spawner != null) Undo.RecordObject(spawner, "Add Default Polygon Zones");
+                        SpawnZoneDefaults.FillPolygonDefaults(polys);
+                    }
+                }
+
+                EditorGUILayout.Space(4f);
+                DrawSnapToolbar();
+                EditorGUILayout.Space(4f);
+
+                if (mode == SpawnZoneMode.Box) DrawBoxZones(settings);
+                else DrawPolygonZones(settings);
+            });
+        }
+
+        private static void DrawSnapToolbar()
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(SnapLabelContent, GUILayout.Width(70f));
+
+            int current = FindSnapIndex(SpawnZoneSceneEditor.SnapStep);
+            int next = GUILayout.Toolbar(current, SnapLabels, GUILayout.Height(18));
+
+            if (next != current) SpawnZoneSceneEditor.SnapStep = SnapSteps[next];
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private static int FindSnapIndex(float step)
+        {
+            for (int i = 0; i < SnapSteps.Length; i++)
+                if (Mathf.Approximately(SnapSteps[i], step)) return i;
+            return 2;
+        }
+
+        private void DrawBoxZones(SerializedProperty settings)
+        {
+            EditorGUILayout.PropertyField(settings.FindPropertyRelative("dimensions"),
+                new GUIContent("Основная зона",
+                    "Размер основной зоны. Центр всегда в локальном (0, 0, 0).\nX, Z — площадь; Y — вертикальный диапазон проверки."),
+                true);
+
+            EditorGUILayout.Space(4f);
+
+            EditorGUILayout.PropertyField(settings.FindPropertyRelative("extraBoxes"),
+                new GUIContent("Дополнительные зоны",
+                    "Дополнительные box-зоны с собственным центром и размером.\nПеретаскивайте центр в Scene View."),
+                true);
+        }
+
+        private void DrawPolygonZones(SerializedProperty settings)
+        {
+            EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
+            EditorGUILayout.LabelField("<b>✏️ Редактирование в Scene View</b>", _styleManager.MiniLabelStyle);
+            EditorGUILayout.LabelField(
+                "• <b>Жёлтый шар</b> — центр ребра (position, 3D)\n" +
+                "• <b>Голубой шар</b> над вершиной — вертикальный размер (Y)\n" +
+                "• <b>Розовый шар</b> — первая вершина (начало контура)\n" +
+                "• <b>Оранжевый шар</b> — центр всей фигуры\n" +
+                "• <b>Зелёная точка</b> на ребре — вставить вершину\n" +
+                "• <b>Shift+клик</b> по вершине — удалить (мин. 3)\n" +
+                "• <b>Ctrl</b> при drag — снап к сетке (см. выше)\n\n" +
+                "Каждая вершина — центр вертикальной грани. Верхний и нижний контуры образуют 3D-объём.",
+                _styleManager.MiniLabelStyle);
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(4f);
+
+            SerializedProperty polys = settings.FindPropertyRelative("polygons");
+            if (polys != null) DrawConcavityWarningIfNeeded(polys);
+            EditorGUILayout.PropertyField(polys, PolygonsContent, true);
+        }
+
+        private void DrawConcavityWarningIfNeeded(SerializedProperty polys)
+        {
+            int concaveCount = 0;
+
+            for (int i = 0; i < polys.arraySize; i++)
+            {
+                SerializedProperty verts = polys.GetArrayElementAtIndex(i).FindPropertyRelative("vertices");
+                if (verts == null) continue;
+
+                int n = verts.arraySize;
+                if (n < 3 || n > _convexityBuffer.Length) continue;
+
+                for (int j = 0; j < n; j++)
+                {
+                    SerializedProperty v = verts.GetArrayElementAtIndex(j);
+                    _convexityBuffer[j] = v.FindPropertyRelative("position").vector3Value;
+                }
+
+                if (!PolygonTriangulator.IsConvex(new ReadOnlySpan<Vector3>(_convexityBuffer, 0, n)))
+                    concaveCount++;
+            }
+
+            if (concaveCount == 0) return;
+
+            if (concaveCount != _concaveCachedCount)
+            {
+                _concaveSb.Clear();
+                _concaveSb.Append("⚠️ Невыпуклая форма (").Append(concaveCount)
+                    .Append("). Используется ear-clipping триангуляция. Убедитесь, что форма не самопересекается.");
+                _concaveCachedText = _concaveSb.ToString();
+                _concaveCachedCount = concaveCount;
+            }
+
+            EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
+            EditorGUILayout.LabelField(_concaveCachedText, _styleManager.MiniLabelStyle);
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.Space(4f);
+        }
+
+        // ───────────────────── Кластеризация ─────────────────────
 
         public void DrawClusteringSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.ClusteringSettings = DrawSection("🌳", "Кластеризация", EditorFoldoutState.ClusteringSettings, textColor, spawner, () =>
+            EditorFoldoutState.ClusteringSettings = DrawSection("🌳", "Кластеризация",
+                EditorFoldoutState.ClusteringSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 SerializedProperty useClustering = settings.FindPropertyRelative("useClustering");
-                EditorGUILayout.PropertyField(useClustering, new GUIContent("useClustering", "Группировать объекты в скопления вместо равномерного распределения"));
-                
+                EditorGUILayout.PropertyField(useClustering, new GUIContent("useClustering",
+                    "Группировать объекты в кластеры."));
+
                 if (useClustering.boolValue)
                 {
-                    DrawPropertyWithHelp(settings, "clusterCount", "Количество групп объектов:\n• Меньше = более разреженное размещение\n• Больше = более плотное заполнение");
-                    DrawPropertyWithHelp(settings, "clusterRadiusRange", "Размеры групп:\n• X - минимальный радиус кластера\n• Y - максимальный радиус кластера");
-                    DrawPropertyWithHelp(settings, "objectsPerClusterRange", "Количество объектов в группе:\n• X - минимальное количество\n• Y - максимальное количество");
-                    DrawPropertyWithHelp(settings, "minDistanceBetweenClusters", "Минимальное расстояние между центрами кластеров:\n• Предотвращает пересечение групп\n• Больше значения = более равномерное распределение");
-
-                    if (showHelpBoxes)
-                    {
-                        EditorGUILayout.Space(3f);
-                        EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                        EditorGUILayout.LabelField("<b>🌳 Примеры использования кластеризации</b>", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.LabelField("• <b>Деревья:</b> 10-20 кластеров, 3-8 объектов в каждом\n• <b>Камни:</b> 15-30 кластеров, 2-5 объектов в каждом\n• <b>Здания:</b> 5-15 кластеров, 4-10 объектов в каждом", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.EndVertical();
-                    }
-                }
-                else if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>💡 Кластеризация отключена</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("Объекты будут распределены равномерно по всей зоне.", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
+                    DrawRelative(settings, "clusterCount",
+                        "Количество кластеров.");
+                    DrawRelative(settings, "clusterRadiusRange",
+                        "Диапазон радиусов кластеров.");
+                    DrawRelative(settings, "objectsPerClusterRange",
+                        "Диапазон количества объектов в кластере.");
+                    DrawRelative(settings, "minDistanceBetweenClusters",
+                        "Минимальное расстояние между центрами кластеров.");
                 }
                 EditorGUILayout.EndVertical();
             });
         }
+
+        // ───────────────────── Лучи ─────────────────────
 
         public void DrawRaySettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.RaySettings = DrawSection("🔦", "Настройки луча", EditorFoldoutState.RaySettings, textColor, spawner, () =>
+            EditorFoldoutState.RaySettings = DrawSection("🔦", "Настройки луча",
+                EditorFoldoutState.RaySettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
-                DrawPropertyWithHelp(settings, "rayCastType", "Тип луча для обнаружения поверхности:\n• Ray - обычный луч (точечный)\n• Sphere - сферический луч (объемный)");
-                
+                DrawRelative(settings, "rayCastType",
+                    "Тип луча для обнаружения поверхности:\n• Ray — точечный\n• Sphere — сферический");
+
                 SerializedProperty rayCastTypeProp = settings.FindPropertyRelative("rayCastType");
                 if (rayCastTypeProp != null && (RayCastType)rayCastTypeProp.enumValueIndex == RayCastType.Sphere)
-                {
-                    DrawPropertyWithHelp(settings, "raySphereRadius", "Радиус сферы при использовании SphereCast.");
-                }
-                
-                DrawPropertyWithHelp(settings, "rayOriginType", "Точка испускания лучей:\n• TopFace - с верхней грани (стандартный)\n• SideFaces - со случайной боковой грани\n• InsideVolume - из случайной точки внутри объема");
-                DrawPropertyWithHelp(settings, "maxRayAngle", "Угол отклонения луча от вертикали:\n• (0,0) - строго вертикально вниз\n• (5,15) - небольшой случайный разброс\n• (30,60) - для сложных поверхностей");
+                    DrawRelative(settings, "raySphereRadius",
+                        "Радиус сферы при rayCastType = Sphere.");
+
+                DrawRelative(settings, "rayOriginType",
+                    "Точка испускания лучей:\n• TopFace — верхняя грань\n• SideFaces — боковые грани\n• InsideVolume — изнутри объёма");
+                DrawRelative(settings, "maxRayAngle",
+                    "Максимальный случайный угол отклонения луча от вертикали. (0,0) = строго вниз.");
                 EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
+                EditorGUILayout.Space(5f);
+
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("🚀 Job-валидация (>2000 объектов)", EditorStyles.boldLabel);
+
+                SerializedProperty useJobs = settings.FindPropertyRelative("useJobValidation");
+                EditorGUILayout.PropertyField(useJobs, new GUIContent(useJobs.displayName,
+                    "Батч-рейкасты через RaycastCommand.ScheduleBatch.\n" +
+                    "Сильно ускоряет валидацию на больших сценах (>2000 кандидатов в кадре).\n" +
+                    "Требует rayCastType = Ray.\n" +
+                    "При недоступности Unity.Collections или Sphere-кастов — авто-fallback на CPU."));
+
+                if (useJobs.boolValue)
                 {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>🎯 Советы по настройке лучей</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("<b>Ray Cast Type:</b>\n• <b>Ray</b> - для точного позиционирования\n• <b>Sphere</b> - для сложных поверхностей\n\n<b>Ray Origin Type:</b>\n• <b>TopFace</b> - стандартный вариант\n• <b>SideFaces</b> - для стен и вертикальных поверхностей\n• <b>InsideVolume</b> - для заполнения объемов\n\n<b>Max Ray Angle:</b>\n• <b>(0,0)</b> - строго вертикально\n• <b>(5,15)</b> - небольшой разброс\n• <b>(30,60)</b> - для наклонных поверхностей", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
+                    DrawRelative(settings, "jobBatchSize",
+                        "Количество команд на один worker-поток (minCommandsPerJob).\n" +
+                        "64 — безопасный дефолт, для тяжёлых сцен можно 128-256.");
+
+                    SerializedProperty rct = settings.FindPropertyRelative("rayCastType");
+                    if (rct != null && (RayCastType)rct.enumValueIndex == RayCastType.Sphere)
+                    {
+                        EditorGUILayout.Space(3f);
+                        EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
+                        EditorGUILayout.LabelField(
+                            "ℹ️ <b>rayCastType = Sphere</b> — job-путь не поддерживает сферические касты и использует CPU.\n" +
+                            "Для активации job-валидации переключите rayCastType на Ray.",
+                            _styleManager.MiniLabelStyle);
+                        EditorGUILayout.EndVertical();
+                    }
                 }
+                EditorGUILayout.EndVertical();
             });
         }
+
+        // ───────────────────── Стабильность ─────────────────────
 
         public void DrawStabilitySettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.StabilitySettings = DrawSection("📊", "Проверка ровности поверхности", EditorFoldoutState.StabilitySettings, textColor, spawner, () =>
+            EditorFoldoutState.StabilitySettings = DrawSection("📊", "Проверка ровности поверхности",
+                EditorFoldoutState.StabilitySettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
                 SerializedProperty edgeCheckRadius = settings.FindPropertyRelative("edgeCheckRadius");
-                EditorGUILayout.PropertyField(edgeCheckRadius, new GUIContent("edgeCheckRadius", "Радиус проверки ровности поверхности. 0 = отключить проверку"));
-                
+                EditorGUILayout.PropertyField(edgeCheckRadius, new GUIContent("edgeCheckRadius",
+                    "Радиус проверки стабильности поверхности. 0 = отключить."));
+
                 if (edgeCheckRadius.floatValue > 0)
                 {
-                    if (showHelpBoxes)
-                    {
-                        EditorGUILayout.Space(3f);
-                        EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                        EditorGUILayout.LabelField("<b>📐 ПРОСТАЯ ПРОВЕРКА ПО ВЫСОТЕ</b>", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.LabelField("Система проверяет высоту поверхности вокруг точки и сравнивает с центральной высотой.\n• Простая и надежная логика\n• Не зависит от углов наклона\n• Обнаруживает обрывы и резкие перепады", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.EndVertical();
-                    }
-                    
-                    DrawPropertyWithHelp(settings, "maxHeightDifference", "Максимальная разница высот (в метрах):\n• 0.1 = 10 см - очень строгая проверка\n• 0.3 = 30 см - стандартная проверка\n• 0.5 = 50 см - мягкая проверка\n• 1.0 = 1 метр - очень мягкая проверка\n• 0.0 = любая разница = отказ");
-                    DrawPropertyWithHelp(settings, "stabilityCheckRays", "Количество проверочных лучей:\n• 4-6 - быстрая проверка по основным направлениям\n• 8-12 - точная проверка\n• 16 - максимальная точность (медленно)");
-                    DrawPropertyWithHelp(settings, "minSuccessPercentage", "Минимальный процент успешных проверок:\n• 100% - ВСЕ лучи должны быть успешны\n• 75% - 3/4 лучей должны быть успешны\n• 50% - половина лучей должна быть успешна\n• 25% - 1/4 лучей должна быть успешна");
-
-                    float maxHeightDiff = settings.FindPropertyRelative("maxHeightDifference").floatValue;
-                    if (maxHeightDiff == 0 && showHelpBoxes)
-                    {
-                        EditorGUILayout.Space(3f);
-                        EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                        EditorGUILayout.LabelField("<b>⚠️ РЕЖИМ АБСОЛЮТНОЙ СТРОГОСТИ</b>", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.LabelField("<b>ЛЮБАЯ разница высот = НЕМЕДЛЕННЫЙ ОТКАЗ!</b>\n• Объекты будут размещаться только на идеально ровных поверхностях\n• Любое отклонение высоты приведет к отказу", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.EndVertical();
-                    }
-                    else if (showHelpBoxes)
-                    {
-                        EditorGUILayout.Space(3f);
-                        EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                        EditorGUILayout.LabelField($"<b>📏 Допустимая разница высот: {maxHeightDiff:F1} метра</b>", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.LabelField("<b>Примеры использования:</b>\n• <b>0.1</b> - для точного размещения на ровных поверхностях\n• <b>0.3</b> - для большинства случаев (рекомендуется)\n• <b>0.5</b> - для холмистой местности\n• <b>1.0</b> - для горной местности", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.EndVertical();
-                    }
-
-                    if (showHelpBoxes)
-                    {
-                        int rays = settings.FindPropertyRelative("stabilityCheckRays").intValue;
-                        float percent = settings.FindPropertyRelative("minSuccessPercentage").floatValue;
-                        
-                        EditorGUILayout.Space(3f);
-                        EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                        EditorGUILayout.LabelField("<b>🎯 КАК РАБОТАЕТ ПРОВЕРКА</b>", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.LabelField($"Система запускает <b>{rays} лучей</b> на расстоянии {edgeCheckRadius.floatValue} метров:\n• Сравнивает высоты точек с центральной высотой\n• Высота может отличаться на <b>{maxHeightDiff:F1} метра</b>\n• Требуется <b>{percent}%</b> успешных проверок\n• <b>✅ Зеленые лучи</b> - успешная проверка\n• <b>🔴 Красные лучи</b> - слишком большая разница высот\n• <b>🟡 Желтые лучи</b> - луч не попал (обрыв)", _styleManager.MiniLabelStyle);
-                        EditorGUILayout.EndVertical();
-                    }
-                }
-                else if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>❓ Проверка ровности отключена</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("Объекты могут размещаться на краях, обрывах и любых неровностях.", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
+                    DrawRelative(settings, "maxHeightDifference",
+                        "Максимальная допустимая разница высот (м). 0 = любая разница = отказ.");
+                    DrawRelative(settings, "stabilityCheckRays",
+                        "Количество лучей проверки стабильности. 4-8 быстро, 12-16 точно.");
+                    DrawRelative(settings, "minSuccessPercentage",
+                        "Минимальный процент успешных проверок для валидности точки.");
                 }
                 EditorGUILayout.EndVertical();
             });
         }
+
+        // ───────────────────── Избегание / полы / потолки ─────────────────────
 
         public void DrawAvoidanceSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.AvoidanceSettings = DrawSection("🚫", "Избегание препятствий", EditorFoldoutState.AvoidanceSettings, textColor, spawner, () =>
+            EditorFoldoutState.AvoidanceSettings = DrawSection("🚫", "Избегание препятствий и потолки",
+                EditorFoldoutState.AvoidanceSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
-                DrawPropertyWithHelp(settings, "checkCeiling", "Проверять наличие препятствий над точкой размещения.");
-                EditorGUILayout.EndVertical();
+                EditorGUILayout.LabelField("🏠 Проверка потолка", EditorStyles.boldLabel);
+                SerializedProperty ceilingMode = settings.FindPropertyRelative("ceilingCheckMode");
+                EditorGUILayout.PropertyField(ceilingMode, new GUIContent("ceilingCheckMode",
+                    "Режим проверки потолка:\n" +
+                    "• None — не проверять\n" +
+                    "• RequireOpenSky — требовать открытое небо\n" +
+                    "• RequireRoof — требовать крышу (пещеры, дома)"));
 
-                if (showHelpBoxes)
+                if ((CeilingCheckMode)ceilingMode.enumValueIndex != CeilingCheckMode.None)
                 {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>🏠 Проверка потолка</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("<b>Полезно для:</b>\n• Предотвращения спавна внутри зданий\n• Избегания размещения под мостами\n• Создания открытых пространств", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
+                    DrawRelative(settings, "ceilingMask",
+                        "Слои, считающиеся потолком. Если пусто — используется avoidMask.");
+                    DrawRelative(settings, "ceilingCheckDistance",
+                        "Длина луча проверки потолка в метрах.");
+                    DrawRelative(settings, "ceilingCheckRadius",
+                        "Радиус сферической проверки потолка. 0 = точечный луч.");
                 }
+                EditorGUILayout.EndVertical();
 
                 EditorGUILayout.Space(3f);
-                
+
                 EditorGUILayout.BeginVertical("box");
-                DrawPropertyWithHelp(settings, "floorCheckDistance", "Дистанция проверки пола под точкой размещения.");
-                DrawPropertyWithHelp(settings, "avoidanceRadius", "Радиус проверки препятствий вокруг точки размещения.");
-                DrawPropertyWithHelp(settings, "minDistanceBetweenObjects", "Минимальное расстояние между объектами.");
+                EditorGUILayout.LabelField("🕳️ Пол и препятствия", EditorStyles.boldLabel);
+                DrawRelative(settings, "floorCheckDistance",
+                    "Дистанция проверки пола под точкой размещения. 0 = отключить.");
+                DrawRelative(settings, "avoidanceRadius",
+                    "Радиус проверки препятствий вокруг точки размещения. 0 = отключить.");
+                DrawRelative(settings, "minDistanceBetweenObjects",
+                    "Минимальное расстояние между объектами.");
                 EditorGUILayout.EndVertical();
-                
-                if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>🚫 Настройки избегания препятствий</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField("• <b>Floor Check Distance:</b> Обнаруживает ямы и провалы (0 = отключить)\n• <b>Avoidance Radius:</b> Защита от близких препятствий\n• <b>Min Distance:</b> Предотвращает наслоение объектов", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
-                }
             });
         }
+
+        // ───────────────────── Runtime ─────────────────────
 
         public void DrawRuntimeSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.RuntimeSettings = DrawSection("⚡", "Настройки Runtime", EditorFoldoutState.RuntimeSettings, textColor, spawner, () =>
+            EditorFoldoutState.RuntimeSettings = DrawSection("⚡", "Настройки Runtime",
+                EditorFoldoutState.RuntimeSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
-                DrawPropertyWithHelp(settings, "enableRuntimeGeneration", "Разрешить работу генератора в собранной игре (Runtime). Если отключено, компонент будет уничтожен при старте.");
-                if (settings.FindPropertyRelative("enableRuntimeGeneration").boolValue)
+                SerializedProperty enableProp = settings.FindPropertyRelative("enableRuntimeGeneration");
+                EditorGUILayout.PropertyField(enableProp, new GUIContent(enableProp.displayName,
+                    "Разрешить работу генератора в собранной игре."));
+
+                if (enableProp.boolValue)
                 {
-                    DrawPropertyWithHelp(settings, "autoGenerateOnStart", "Автоматически запускать генерацию при старте (только если enableRuntimeGeneration = true).");
-                    DrawPropertyWithHelp(settings, "destroyAfterGeneration", "Удалить компонент после завершения генерации (экономит память).");
+                    DrawRelative(settings, "autoGenerateOnStart",
+                        "Автоматически запускать генерацию при старте (только если enableRuntimeGeneration).");
+                    DrawRelative(settings, "destroyAfterGeneration",
+                        "Удалить компонент после завершения генерации.");
+
                     EditorGUILayout.Space(5f);
                     EditorGUILayout.LabelField("🛡️ Защита от бесконечных циклов", EditorStyles.boldLabel);
-                    DrawPropertyWithHelp(settings, "runtimeMaxAttempts", "Максимальное общее количество попыток размещения в Runtime (предотвращает зависания).");
-                    DrawPropertyWithHelp(settings, "runtimeRetryCount", "Количество перезапусков генерации при недостижении цели (0 = не перезапускать).");
+                    DrawRelative(settings, "runtimeMaxAttempts",
+                        "Максимальное общее количество попыток размещения в Runtime.");
+                    DrawRelative(settings, "runtimeRetryCount",
+                        "Количество перезапусков при недостижении цели (только Runtime).");
                 }
                 EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
-                {
-                    EditorGUILayout.Space(3f);
-                    EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>⚡ Особенности работы в Runtime</b>", _styleManager.MiniLabelStyle);
-                    EditorGUILayout.LabelField(
-                        "• <b>enableRuntimeGeneration</b> – если выключено, компонент удаляется при старте игры.\n" +
-                        "• <b>autoGenerateOnStart</b> – автоматический запуск генерации при старте.\n" +
-                        "• <b>destroyAfterGeneration</b> – удаляет компонент после генерации, освобождая память.\n" +
-                        "• <b>runtimeMaxAttempts</b> – лимит попыток, после которого попытка прерывается.\n" +
-                        "• <b>runtimeRetryCount</b> – количество дополнительных попыток, если цель не достигнута.\n" +
-                        "• <b>Вручную</b> можно запустить генерацию через <b>spawner.Generate()</b> или <b>spawner.GenerateAsync()</b> (Awaitable).",
-                        _styleManager.MiniLabelStyle);
-                    EditorGUILayout.EndVertical();
-                }
+                EditorGUILayout.Space(3f);
+
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("♻️ Переиспользование объектов", EditorStyles.boldLabel);
+                DrawRelative(settings, "reuseExistingObjects",
+                    "Переиспользовать существующие дочерние объекты при повторной генерации:\n" +
+                    "• Меньше объектов → лишние деактивируются (SetActive false), не удаляются.\n" +
+                    "• Больше объектов → недостающие инстанцируются.\n" +
+                    "Работает и в редакторе, и в Runtime.");
+                EditorGUILayout.EndVertical();
             });
         }
+
+        // ───────────────────── NavMesh ─────────────────────
 
         public void DrawNavMeshSettings(SerializedProperty settings, bool showHelpBoxes, WorldGeneration spawner)
         {
             Color textColor = settings.FindPropertyRelative("gizmoColor").colorValue;
-            EditorFoldoutState.NavMeshSettings = DrawSection("🧭", "NavMesh", EditorFoldoutState.NavMeshSettings, textColor, spawner, () =>
+            EditorFoldoutState.NavMeshSettings = DrawSection("🧭", "NavMesh",
+                EditorFoldoutState.NavMeshSettings, textColor, spawner, () =>
             {
                 EditorGUILayout.BeginVertical("box");
-                DrawPropertyWithHelp(settings, "useNavMeshCheck", "Проверять, что точка размещения находится на NavMesh (требуется система NavMesh).");
-                if (settings.FindPropertyRelative("useNavMeshCheck").boolValue)
+                SerializedProperty useProp = settings.FindPropertyRelative("useNavMeshCheck");
+                EditorGUILayout.PropertyField(useProp, new GUIContent(useProp.displayName,
+                    "Проверять, что точка находится на NavMesh."));
+
+                if (useProp.boolValue)
                 {
-                    DrawPropertyWithHelp(settings, "navMeshSampleRadius", "Радиус поиска ближайшей точки на NavMesh. 0 = стандартное значение (1).");
-                    DrawPropertyWithHelp(settings, "snapToNavMesh", "Корректировать позицию на ближайшую точку NavMesh (если точка не на NavMesh, но рядом).");
+                    DrawRelative(settings, "navMeshSampleRadius",
+                        "Радиус поиска ближайшей точки на NavMesh. 0 = 1.");
+                    DrawRelative(settings, "snapToNavMesh",
+                        "Корректировать позицию на ближайшую точку NavMesh.");
                 }
                 EditorGUILayout.EndVertical();
 
-                if (showHelpBoxes)
+                EditorGUILayout.Space(3f);
+
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.LabelField("🔄 Авто-перегенерация NavMesh Surface", EditorStyles.boldLabel);
+
+                SerializedProperty modeProp = settings.FindPropertyRelative("navMeshRegenerationMode");
+                EditorGUI.BeginChangeCheck();
+                EditorGUILayout.PropertyField(modeProp, new GUIContent("Режим",
+                    "Когда вызывать NavMeshSurface.BuildNavMesh() (только редактор):\n" +
+                    "• Never — никогда\n" +
+                    "• OnSingleGeneration — только при одиночной генерации\n" +
+                    "• OnFullRegeneration — только при полной перегенерации\n" +
+                    "• Always — всегда\n\n" +
+                    "Настройка автоматически синхронизируется со всеми спавнерами сцены."));
+                bool modeChanged = EditorGUI.EndChangeCheck();
+
+                DrawRelative(settings, "requestNavMeshRegeneration",
+                    "Этот спавнер запрашивает перегенерацию NavMesh после своей генерации.\n" +
+                    "Отключите для мобов и декора, не меняющих проходимость.");
+
+                if (modeChanged)
+                {
+                    int newIdx = modeProp.enumValueIndex;
+                    WorldGeneration[] all = UnityEngine.Object.FindObjectsByType<WorldGeneration>(FindObjectsInactive.Include);
+                    for (int i = 0; i < all.Length; i++)
+                    {
+                        if (all[i] == spawner) continue;
+                        all[i].settings.navMeshRegenerationMode = (NavMeshRegenerationMode)newIdx;
+                        EditorUtility.SetDirty(all[i]);
+                    }
+                }
+
+                if ((NavMeshRegenerationMode)modeProp.enumValueIndex != NavMeshRegenerationMode.Never &&
+                    !NavMeshRegenerationService.HasNavMeshSurface())
                 {
                     EditorGUILayout.Space(3f);
                     EditorGUILayout.BeginVertical(_styleManager.HelpBoxStyle);
-                    EditorGUILayout.LabelField("<b>🧭 Использование NavMesh</b>", _styleManager.MiniLabelStyle);
                     EditorGUILayout.LabelField(
-                        "• <b>useNavMeshCheck</b> – включает проверку принадлежности точки NavMesh.\n" +
-                        "• <b>snapToNavMesh</b> – автоматически корректирует позицию, если точка рядом с NavMesh.\n" +
-                        "• <b>navMeshSampleRadius</b> – зона поиска для SamplePosition.\n" +
-                        "Полезно для размещения объектов, с которыми взаимодействуют NPC (добыча, ресурсы).",
+                        "ℹ️ <b>Пакет AI Navigation не обнаружен.</b>\nУстановите его через Package Manager.",
                         _styleManager.MiniLabelStyle);
                     EditorGUILayout.EndVertical();
                 }
+                EditorGUILayout.EndVertical();
             });
         }
 
-        private bool DrawSection(string emoji, string title, bool showState, Color textColor, WorldGeneration spawner, System.Action content)
+        // ───────────────────── Хелперы ─────────────────────
+
+        private bool DrawSection(string emoji, string title, bool showState, Color textColor,
+            WorldGeneration spawner, System.Action content)
         {
             EditorGUILayout.BeginVertical("box");
-            
-            // Формируем строку с Rich Text: эмодзи без тега (будут белыми), текст окрашен
             string colorHex = ColorUtility.ToHtmlStringRGB(textColor);
             string displayName = $"{emoji} <color=#{colorHex}>{title}</color>";
-            GUIContent contentLabel = new GUIContent(displayName);
-            
+            GUIContent contentLabel = new(displayName);
+
             bool newState = EditorGUILayout.Foldout(showState, contentLabel, _styleManager.FoldoutStyle);
-            
-            if (newState != showState)
-            {
-                showState = newState;
-            }
-            
-            if (showState)
-            {
-                EditorGUI.indentLevel++;
-                content();
-                EditorGUI.indentLevel--;
-            }
-            
+            if (newState != showState) showState = newState;
+
+            if (showState) { EditorGUI.indentLevel++; content(); EditorGUI.indentLevel--; }
+
             EditorGUILayout.EndVertical();
-            
             EditorGUILayout.Space(4f);
-            
             return showState;
         }
 
-        private void DrawPropertyWithHelp(SerializedProperty parent, string propertyName, string tooltip)
+        /// <summary>Рисует поле с тултипом. Display name берётся из атрибута или camelCase.</summary>
+        private void DrawRelative(SerializedProperty parent, string propertyName, string tooltip)
         {
             SerializedProperty property = parent.FindPropertyRelative(propertyName);
-            if (property != null)
-            {
-                EditorGUILayout.PropertyField(property, new GUIContent(property.displayName, tooltip));
-            }
+            if (property == null) return;
+            EditorGUILayout.PropertyField(property, new GUIContent(property.displayName, tooltip));
         }
     }
 }

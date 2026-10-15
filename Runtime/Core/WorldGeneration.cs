@@ -1,31 +1,38 @@
 using UnityEngine;
-using System.Collections.Generic;
+using UnityEngine.AI;
 using System;
-using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Threading;
 
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
 
+// Alias вместо `using System.Diagnostics;` — иначе конфликт UnityEngine.Debug <-> System.Diagnostics.Debug.
+using Stopwatch = System.Diagnostics.Stopwatch;
+
 namespace NeonImperium.WorldGenerations
 {
     [ExecuteInEditMode]
+    [DisallowMultipleComponent]
     public class WorldGeneration : MonoBehaviour
     {
-        private static int _globalSeedCounter = 0;
+        private static int _globalSeedCounter;
+        private static readonly Stopwatch UptimeStopwatch = Stopwatch.StartNew();
+        private const int PlacementAttemptsPerFrame = 25;
 
-        [SerializeField] private int _seed = 0;
-        public int Seed 
-        { 
-            get => _seed; 
-            set 
-            { 
-                _seed = value; 
-                _modulesInitialized = false; 
-            } 
+        [SerializeField]
+        [Tooltip("Seed генерации. 0 = уникальный при каждом запуске (если useDeterministicSeed = false).")]
+        private int _seed;
+
+        public int Seed
+        {
+            get => _seed;
+            set { _seed = value; _modulesInitialized = false; }
         }
 
         public SpawnSettings settings = new();
+
         public int SpawnedCount => transform.childCount;
         public int ValidPlacementCount => _placementCache.Count;
         public bool IsGenerating => _generationInProgress;
@@ -33,496 +40,514 @@ namespace NeonImperium.WorldGenerations
 
         public event Action OnGenerationComplete;
 
-        [HideInInspector] private List<PlacementData> _placementCache = new();
+        [System.NonSerialized] private List<PlacementData> _placementCache = new();
+        [System.NonSerialized] private List<PlacementData> _previewCache = new();
         [SerializeField, HideInInspector] private int _totalPlacementAttempts;
 
         public Dictionary<FailureReasonType, int> FailureStatistics { get; private set; } = new();
+        public IReadOnlyList<PlacementData> PreviewCache => _previewCache;
 
         private IPointGenerator _pointGenerator;
         private IPlacementValidator _placementValidator;
         private IPhysicsService _physicsService;
-        private IDebugLogger _debugLogger;
+        private IDebugLogger _debugLogger = NullDebugLogger.Instance;
+        private SpatialHash _placementHash;
 
-        private Awaitable _generationAwaitable;
+        [System.NonSerialized] private PlacementData[] _batchOutput;
+        [System.NonSerialized] private readonly List<PlacementPoint> _batchCandidates = new(128);
+        private List<NavMeshBuildSource> _runtimeNavMeshSources;
+
         private bool _generationInProgress;
-        private const int PlacementAttemptsPerFrame = 25;
         private int _runtimeRetryCount;
-        private bool _modulesInitialized = false;
+        private bool _modulesInitialized;
 
-        private static List<WorldGeneration> _runtimeSpawners = new();
-        private static bool _isRuntimeQueueProcessing = false;
+        private CancellationTokenSource _generationCts;
 
         public List<DebugRay> debugRays => _debugLogger?.GetDebugRays() ?? new List<DebugRay>();
-
         public void ClearDebugRays() => _debugLogger?.ClearDebugRays();
         public int GetClusterCentersCount() => _pointGenerator is ClusterPointGenerator cpg ? cpg.GetClusterCount() : 0;
 
         public void AddDebugRay(Vector3 start, Vector3 direction, float distance, Color color, DebugRayType rayType)
-        {
-            _debugLogger?.AddDebugRay(start, direction, distance, color, rayType);
-        }
+            => _debugLogger.TryAddRay(start, direction, distance, color, rayType);
+
+        private bool CanUseJobValidation =>
+            settings.useJobValidation
+            && settings.rayCastType == RayCastType.Ray
+            && _placementValidator is PlacementValidator { JobsAvailable: true };
+
+        private int GetFrameBatchSize() =>
+            CanUseJobValidation ? Mathf.Max(PlacementAttemptsPerFrame, settings.jobBatchSize) : PlacementAttemptsPerFrame;
+
+        // ─────────────────────── Lifecycle ───────────────────────
 
         private void Awake()
         {
             if (!Application.isPlaying) return;
-
-            if (!settings.enableRuntimeGeneration)
-            {
-                Destroy(this);
-                return;
-            }
-
+            if (!settings.enableRuntimeGeneration) { Destroy(this); return; }
             EnsureModulesInitialized();
-
-            if (settings.autoGenerateOnStart)
-            {
-                AddToRuntimeQueue(this);
-            }
-        }
-
-        private void Start()
-        {
-            if (!Application.isPlaying) return;
-            if (!settings.enableRuntimeGeneration || !settings.autoGenerateOnStart) return;
-
-            if (!_isRuntimeQueueProcessing)
-            {
-                _ = ProcessRuntimeQueueAsync();
-            }
+            if (settings.autoGenerateOnStart) RuntimeSpawnQueueService.Enqueue(this);
         }
 
         private void OnDestroy()
         {
             StopGeneration();
-            if (Application.isPlaying)
-            {
-                _runtimeSpawners.Remove(this);
-            }
-#if UNITY_EDITOR
-            EditorApplication.update -= AsyncGenerationUpdate;
-            SceneView.duringSceneGui -= OnSceneGUI;
-#endif
+
+            // Валидатор владеет PlacementJobs — dispose'им через его интерфейс.
+            _placementValidator?.Dispose();
+            _placementValidator = null;
+
+            _generationCts?.Dispose();
+            _generationCts = null;
         }
 
         private void OnValidate()
         {
-            if (Application.isPlaying) return;
-            settings.population = Math.Max(1, settings.population);
-            settings.maxPlacementAttempts = Math.Max(1, settings.maxPlacementAttempts);
-            settings.priority = Mathf.Clamp(settings.priority, 0, 100);
-            settings.runtimeMaxAttempts = Math.Max(1, settings.runtimeMaxAttempts);
-            settings.runtimeRetryCount = Mathf.Clamp(settings.runtimeRetryCount, 0, 10);
-            settings.rotationRange.x = Mathf.Clamp(settings.rotationRange.x, 0f, 360f);
-            settings.rotationRange.y = Mathf.Clamp(settings.rotationRange.y, 0f, 360f);
-            if (settings.rotationRange.x > settings.rotationRange.y)
-                settings.rotationRange.x = settings.rotationRange.y;
-            settings.scaleRange.x = Mathf.Max(0.1f, settings.scaleRange.x);
-            settings.scaleRange.y = Mathf.Max(0.1f, settings.scaleRange.y);
-            if (settings.scaleRange.x > settings.scaleRange.y)
-                settings.scaleRange.x = settings.scaleRange.y;
-            settings.maxHeightDifference = Mathf.Max(0.1f, settings.maxHeightDifference);
-            settings.maxRayAngle.x = Mathf.Clamp(settings.maxRayAngle.x, 0f, 90f);
-            settings.maxRayAngle.y = Mathf.Clamp(settings.maxRayAngle.y, 0f, 90f);
-            if (settings.maxRayAngle.x > settings.maxRayAngle.y)
-                settings.maxRayAngle.x = settings.maxRayAngle.y;
-            settings.clusterCount = Mathf.Clamp(settings.clusterCount, 1, 100);
-            settings.clusterRadiusRange.x = Mathf.Max(1f, settings.clusterRadiusRange.x);
-            settings.clusterRadiusRange.y = Mathf.Max(1f, settings.clusterRadiusRange.y);
-            if (settings.clusterRadiusRange.x > settings.clusterRadiusRange.y)
-                settings.clusterRadiusRange.x = settings.clusterRadiusRange.y;
-            settings.objectsPerClusterRange.x = Mathf.Clamp(settings.objectsPerClusterRange.x, 1, 20);
-            settings.objectsPerClusterRange.y = Mathf.Clamp(settings.objectsPerClusterRange.y, 1, 20);
-            if (settings.objectsPerClusterRange.x > settings.objectsPerClusterRange.y)
-                settings.objectsPerClusterRange.x = settings.objectsPerClusterRange.y;
+            _previewCache.Clear();
+            settings?.Clamp();
+            _modulesInitialized = false;
         }
 
         private void EnsureModulesInitialized()
         {
             if (_modulesInitialized) return;
 
+            // Пересоздаём валидатор — старый освобождает свои persistent-буферы.
+            _placementValidator?.Dispose();
+            _placementValidator = null;
+
             _physicsService ??= new PhysicsService();
-            _debugLogger ??= new DebugLogger(settings.debugRaySettings);
+            _debugLogger = new DebugLogger(settings.debugRaySettings);
 
-            int seed = _seed != 0 ? _seed : GetUniqueSeed();
-            _placementValidator = new PlacementValidator(seed);
+            int resolved = SpawnSettings.ResolveSeed(_seed, settings.useDeterministicSeed);
+            int seed = resolved != 0 ? resolved : GetUniqueSeed();
 
-            if (settings.useClustering)
-                _pointGenerator = new ClusterPointGenerator();
-            else
-                _pointGenerator = new RandomPointGenerator();
+            List<ISpawnZone> zones = SpawnZoneBuilder.Build(settings);
+            _placementValidator = new PlacementValidator(settings, seed, zones);
 
-            _pointGenerator.Initialize(settings, transform, _debugLogger, _physicsService, seed);
+            _pointGenerator = settings.useClustering ? new ClusterPointGenerator() : new RandomPointGenerator();
+            _pointGenerator.Initialize(settings, transform, _debugLogger, _physicsService, seed, zones);
+
+            _placementHash = settings.minDistanceBetweenObjects > 0
+                ? new SpatialHash(settings.minDistanceBetweenObjects, Mathf.Clamp(settings.population, 16, 8192))
+                : null;
+
+            int frameBatch = GetFrameBatchSize();
+            if (_batchOutput == null || _batchOutput.Length < frameBatch)
+                _batchOutput = new PlacementData[Mathf.NextPowerOfTwo(Mathf.Max(frameBatch, 64))];
+
+            if (_batchCandidates.Capacity < frameBatch)
+                _batchCandidates.Capacity = frameBatch;
+
             _modulesInitialized = true;
         }
 
-        private int GetUniqueSeed()
+        private static int GetUniqueSeed()
         {
-            int baseSeed = GetHashCode() ^ (int)(Time.realtimeSinceStartup * 1000) ^ System.Environment.TickCount;
-            return baseSeed + (++_globalSeedCounter);
+            long ticks = UptimeStopwatch.ElapsedTicks;
+            int tickHash = unchecked((int)(ticks ^ (ticks >> 32)));
+            int counter = Interlocked.Increment(ref _globalSeedCounter);
+            return tickHash + Environment.TickCount + counter;
         }
 
-        private void ResetModulesState()
-        {
-            _debugLogger?.ClearDebugRays();
-            _modulesInitialized = false;
-            _placementValidator = null;
-            _pointGenerator = null;
-            EnsureModulesInitialized();
-        }
-
-#if UNITY_EDITOR
-        private void OnDrawGizmosSelected()
-        {
-            Gizmos.matrix = transform.localToWorldMatrix;
-            Gizmos.color = settings.gizmoColor;
-            Gizmos.DrawWireCube(Vector3.zero, settings.dimensions);
-            Color transparentColor = new(settings.gizmoColor.r, settings.gizmoColor.g, settings.gizmoColor.b, 0.1f);
-            Gizmos.color = transparentColor;
-            Gizmos.DrawCube(Vector3.zero, settings.dimensions);
-            Gizmos.matrix = Matrix4x4.identity;
-
-            if (settings.debugRaySettings.enabled && _debugLogger != null)
-            {
-                List<DebugRay> rays = _debugLogger.GetDebugRays();
-                for (int i = 0; i < rays.Count; i++)
-                {
-                    Gizmos.color = rays[i].color;
-                    Gizmos.DrawLine(rays[i].start, rays[i].end);
-                }
-            }
-
-            if (settings.useClustering && _pointGenerator is ClusterPointGenerator cpg)
-            {
-                List<ClusterPointGenerator.ClusterData> clusters = cpg.GetClusters();
-                if (clusters != null)
-                {
-                    for (int i = 0; i < clusters.Count; i++)
-                    {
-                        ClusterPointGenerator.ClusterData cluster = clusters[i];
-                        Vector3 worldCenter = transform.TransformPoint(cluster.center);
-                        Gizmos.color = Color.green;
-                        Gizmos.DrawWireSphere(worldCenter, 0.5f);
-                        Gizmos.color = new Color(0, 1, 0, 0.3f);
-                        Gizmos.DrawSphere(worldCenter, cluster.radius);
-                    }
-                }
-            }
-        }
-#endif
+        // ─────────────────────── Public API ───────────────────────
 
         [ContextMenu("Generate Objects")]
         public void Generate()
         {
             if (_generationInProgress) return;
-            if (settings.prefabs.Length == 0)
+            if (settings.prefabs == null || settings.prefabs.Length == 0)
             {
-                Debug.LogError("Префаб не настроен!", this);
+                UnityEngine.Debug.LogError("Префаб не настроен!", this);
                 return;
             }
             if (settings.collisionMask.value == 0)
             {
-                Debug.LogError("Collision Mask не настроен!", this);
+                UnityEngine.Debug.LogError("Collision Mask не настроен!", this);
                 return;
             }
 
-            ClearAll();
+            if (settings.reuseExistingObjects) ClearGenerationState();
+            else ClearAll();
+
             EnsureModulesInitialized();
 
 #if UNITY_EDITOR
             if (!Application.isPlaying)
             {
-                EditorApplication.update += AsyncGenerationUpdate;
-                SceneView.duringSceneGui += OnSceneGUI;
                 _generationInProgress = true;
-                Debug.Log($"[{name}] Запущена генерация в редакторе (асинхронно).");
+                EditorGenerationDriver.Start(this);
+                UnityEngine.Debug.Log($"[{name}] Запущена генерация в редакторе (асинхронно).");
                 return;
             }
 #endif
+            if (Application.isPlaying) _ = GenerateAsync();
+        }
 
-            if (Application.isPlaying)
+        /// <summary>Preview-прогон: N попыток валидации без Instantiate.</summary>
+        public void GeneratePreview()
+        {
+            _previewCache.Clear();
+            if (settings.prefabs == null || settings.prefabs.Length == 0) return;
+            if (settings.collisionMask.value == 0) return;
+
+            EnsureModulesInitialized();
+            if (_pointGenerator == null || _placementValidator == null) return;
+
+            int attempts = Mathf.Clamp(settings.previewAttempts, 10, 1000);
+            for (int i = 0; i < attempts; i++)
             {
-                _ = GenerateAsync();
+                PlacementPoint point = _pointGenerator.GeneratePoint();
+                if (point.zoneIndex < 0)
+                {
+                    _previewCache.Add(new PlacementData { isValid = false, failureReason = FailureReasonType.NoHit });
+                    continue;
+                }
+                _previewCache.Add(_placementValidator.Validate(point, transform, _previewCache,
+                    _debugLogger, _physicsService, null));
             }
         }
+
+        public void ClearPreview() => _previewCache.Clear();
 
         public async Awaitable GenerateAsync()
         {
             if (_generationInProgress) return;
-            if (settings.prefabs.Length == 0)
+            if (settings.prefabs == null || settings.prefabs.Length == 0)
             {
-                Debug.LogError("Префаб не настроен!", this);
+                UnityEngine.Debug.LogError("Префаб не настроен!", this);
                 return;
             }
             if (settings.collisionMask.value == 0)
             {
-                Debug.LogError("Collision Mask не настроен!", this);
+                UnityEngine.Debug.LogError("Collision Mask не настроен!", this);
                 return;
             }
 
-            ClearAll();
+            if (settings.reuseExistingObjects) ClearGenerationState();
+            else ClearAll();
+
             EnsureModulesInitialized();
+
+            _generationCts?.Dispose();
+            _generationCts = new CancellationTokenSource();
+            CancellationToken token = _generationCts.Token;
 
             _generationInProgress = true;
             _runtimeRetryCount = 0;
             bool completed = false;
 
-            
-#if UNITY_EDITOR
-            Debug.Log($"[{name}] Начинается генерация (Runtime). Seed: {(_seed != 0 ? _seed.ToString() : "случайный")}");
-#endif
-
-            while (!completed && _runtimeRetryCount < settings.runtimeRetryCount + 1)
+            try
             {
-                _placementCache = new List<PlacementData>(settings.population);
-                _totalPlacementAttempts = 0;
-                FailureStatistics.Clear();
-                ClearDebugRays();
-                
-                if (_runtimeRetryCount > 0)
+                while (!completed && _runtimeRetryCount < settings.runtimeRetryCount + 1)
                 {
-                    _modulesInitialized = false;
-                    EnsureModulesInitialized();
-                }
+                    token.ThrowIfCancellationRequested();
 
-                while (_placementCache.Count < settings.population && (_pointGenerator.HasMorePoints() || !settings.useClustering))
-                {
-                    if (Application.isPlaying && _totalPlacementAttempts >= settings.runtimeMaxAttempts)
+                    _placementCache = new List<PlacementData>(settings.population);
+                    _totalPlacementAttempts = 0;
+                    FailureStatistics.Clear();
+                    ClearDebugRays();
+                    _placementHash?.Clear();
+
+                    if (_runtimeRetryCount > 0)
                     {
-                        Debug.LogWarning($"[{name}] Достигнут лимит попыток ({settings.runtimeMaxAttempts}), прерываем попытку генерации.");
-                        break;
+                        _modulesInitialized = false;
+                        EnsureModulesInitialized();
                     }
 
-                    int pointsToGenerate = Mathf.Min(PlacementAttemptsPerFrame, settings.population - _placementCache.Count);
-                    GeneratePlacementPointsBatch(pointsToGenerate);
-                    await Awaitable.NextFrameAsync();
-                }
+                    while (_placementCache.Count < settings.population &&
+                           (_pointGenerator.HasMorePoints() || !settings.useClustering))
+                    {
+                        token.ThrowIfCancellationRequested();
 
-                if (_placementCache.Count >= settings.population)
-                {
-                    completed = true;
-                    break;
-                }
-                else
-                {
+                        if (_totalPlacementAttempts >= settings.runtimeMaxAttempts)
+                        {
+                            UnityEngine.Debug.LogWarning($"[{name}] Достигнут лимит попыток.");
+                            break;
+                        }
+
+                        int batch = Mathf.Min(GetFrameBatchSize(), settings.population - _placementCache.Count);
+                        GeneratePlacementPointsBatch(batch);
+
+                        if (_placementCache.Count < settings.population)
+                            await Awaitable.NextFrameAsync(token);
+                    }
+
+                    if (_placementCache.Count >= settings.population) { completed = true; break; }
                     _runtimeRetryCount++;
-                    if (_runtimeRetryCount < settings.runtimeRetryCount + 1)
-                    {
-                        Debug.Log($"[{name}] Попытка {_runtimeRetryCount} не достигла цели, перезапуск...");
-                        continue;
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"[{name}] Исчерпаны все попытки перезапуска ({settings.runtimeRetryCount}). Генерация завершена с {_placementCache.Count} объектами.");
-                        completed = true;
-                        break;
-                    }
+                    if (_runtimeRetryCount >= settings.runtimeRetryCount + 1) completed = true;
                 }
+
+                await CreateObjectsFromPlacementData(token);
+                await TryRuntimeNavMeshRegenerationAsync(token);
+
+                CallGenerationCompleteExtensions();
+                OnGenerationComplete?.Invoke();
+
+                if (settings.destroyAfterGeneration && Application.isPlaying)
+                    Destroy(this);
             }
-
-            await CreateObjectsFromPlacementData();
-            CallGenerationCompleteExtensions();
-            OnGenerationComplete?.Invoke();
-
-            if (settings.destroyAfterGeneration && Application.isPlaying)
-                Destroy(this);
-
-            _generationInProgress = false;
-            Debug.Log($"[{name}] Генерация завершена. Создано объектов: {transform.childCount}");
+            catch (OperationCanceledException)
+            {
+                // штатная отмена — тихо выходим
+            }
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogException(e, this);
+            }
+            finally
+            {
+                _generationInProgress = false;
+            }
         }
+
+        // ─────────────────────── Batch generation ───────────────────────
 
         private void GeneratePlacementPointsBatch(int desiredCount)
         {
-            if (_pointGenerator == null || _placementValidator == null)
-            {
-                Debug.LogError("Модули не инициализированы! Вызовите EnsureModulesInitialized().");
-                return;
-            }
-
+            if (_pointGenerator == null || _placementValidator == null) return;
             ClearDebugRays();
-            int validPoints = 0;
-            int attempts = 0;
+
+            if (CanUseJobValidation) { GeneratePlacementPointsBatchJob(desiredCount); return; }
+
+            int validPoints = 0, attempts = 0;
             int maxAttempts = desiredCount * settings.maxPlacementAttempts;
 
             while (validPoints < desiredCount && attempts++ < maxAttempts)
             {
-                if (_placementCache.Count >= settings.population)
-                    break;
-
+                if (_placementCache.Count >= settings.population) break;
                 _totalPlacementAttempts++;
-                PlacementPoint point = _pointGenerator.GeneratePoint();
-                if (point.localPosition == Vector3.zero && settings.useClustering)
-                    continue;
 
-                PlacementData placementData = _placementValidator.Validate(point, settings, transform, _placementCache, _debugLogger, _physicsService);
-                if (placementData.isValid)
+                PlacementPoint point = _pointGenerator.GeneratePoint();
+                if (point.zoneIndex < 0) continue;
+
+                PlacementData data = _placementValidator.Validate(point, transform, _placementCache,
+                    _debugLogger, _physicsService, _placementHash);
+
+                if (data.isValid)
                 {
-                    _placementCache.Add(placementData);
+                    _placementCache.Add(data);
+                    _placementHash?.Insert(data.position, _placementCache.Count - 1);
                     validPoints++;
                 }
-                else
-                {
-                    if (FailureStatistics.ContainsKey(placementData.failureReason))
-                        FailureStatistics[placementData.failureReason]++;
-                    else
-                        FailureStatistics[placementData.failureReason] = 1;
-                }
+                else RecordFailure(data.failureReason);
             }
         }
 
-        private async Task CreateObjectsFromPlacementData()
+        /// <summary>Job-путь: собрать кандидатов → ValidateBatch → разобрать результат.</summary>
+        private void GeneratePlacementPointsBatchJob(int desiredCount)
+        {
+            int wanted = desiredCount;
+            int remaining = settings.population - _placementCache.Count;
+            if (wanted > remaining) wanted = remaining;
+            if (wanted <= 0) return;
+
+            _batchCandidates.Clear();
+
+            int maxAttempts = wanted * settings.maxPlacementAttempts;
+            int attempts = 0;
+
+            while (_batchCandidates.Count < wanted && attempts++ < maxAttempts)
+            {
+                _totalPlacementAttempts++;
+                PlacementPoint point = _pointGenerator.GeneratePoint();
+                if (point.zoneIndex < 0) continue;
+                _batchCandidates.Add(point);
+            }
+
+            int count = _batchCandidates.Count;
+            if (count <= 0) return;
+
+            if (_batchOutput == null || _batchOutput.Length < count)
+                _batchOutput = new PlacementData[Mathf.NextPowerOfTwo(count)];
+
+            _placementValidator.ValidateBatch(_batchCandidates, 0, count, transform,
+                _debugLogger, _physicsService, _placementHash, _batchOutput);
+
+            for (int i = 0; i < count; i++)
+            {
+                PlacementData data = _batchOutput[i];
+                if (data.isValid)
+                {
+                    _placementCache.Add(data);
+                    _placementHash?.Insert(data.position, _placementCache.Count - 1);
+                }
+                else RecordFailure(data.failureReason);
+            }
+        }
+
+        private void RecordFailure(FailureReasonType reason)
+        {
+            FailureStatistics.TryGetValue(reason, out int count);
+            FailureStatistics[reason] = count + 1;
+        }
+
+        // ─────────────────────── Instantiating ───────────────────────
+
+        private async Awaitable CreateObjectsFromPlacementData(CancellationToken token)
         {
             bool wasActive = gameObject.activeSelf;
             if (Application.isPlaying)
             {
                 gameObject.SetActive(false);
-                await Awaitable.NextFrameAsync();
+                await Awaitable.NextFrameAsync(token);
             }
 
-            int objectsToCreate = Mathf.Min(_placementCache.Count, settings.population);
-            for (int i = 0; i < objectsToCreate; i++)
-            {
-                PlacementData data = _placementCache[i];
-                if (!data.isValid || data.prefab == null) continue;
+            await ObjectInstantiator.InstantiateBatchAsync(_placementCache, transform, settings.population,
+                settings.onSpawnExtensions, settings.reuseExistingObjects, token);
 
-                GameObject newObj;
-#if UNITY_EDITOR
-                if (Application.isPlaying)
-                    newObj = Instantiate(data.prefab, transform);
-                else
-                    newObj = (GameObject)PrefabUtility.InstantiatePrefab(data.prefab, transform);
-#else
-                newObj = Instantiate(data.prefab, transform);
-#endif
-
-                newObj.transform.SetPositionAndRotation(data.position, data.rotation);
-                newObj.transform.localScale = data.scale;
-                CallOnSpawnExtensions(newObj);
-            }
-
-            if (Application.isPlaying)
-            {
-                gameObject.SetActive(wasActive);
-            }
+            if (Application.isPlaying) gameObject.SetActive(wasActive);
         }
 
-        private void CallOnSpawnExtensions(GameObject obj)
+        // ─────────────────────── NavMesh ───────────────────────
+
+        private async Awaitable TryRuntimeNavMeshRegenerationAsync(CancellationToken token)
         {
-            for (int i = 0; i < settings.onSpawnExtensions.Count; i++)
+            if (!Application.isPlaying) return;
+            if (!settings.requestNavMeshRegeneration) return;
+
+            if (NavMeshRegenerationService.HasNavMeshSurface())
             {
-                WorldGenerationExtension extension = settings.onSpawnExtensions[i];
-                if (extension != null)
-                    extension.OnGameObjectSpawned(obj);
+                int rebuilt = NavMeshRegenerationService.RebuildAllSurfacesSync();
+                if (rebuilt > 0)
+                {
+                    UnityEngine.Debug.Log(
+                        $"[{name}] Runtime NavMesh перегенерирован через NavMeshSurface: {rebuilt} surface(ов).");
+                    return;
+                }
             }
+
+            NavMeshData data = settings.runtimeNavMeshData;
+            if (data == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[{name}] requestNavMeshRegeneration=true, но runtimeNavMeshData не назначен и NavMeshSurface не найден.\n" +
+                    "Создайте NavMeshSurface (AI Navigation) → Bake → сохраните NavMeshData как .asset и назначьте в runtimeNavMeshData.");
+                return;
+            }
+
+            if (_runtimeNavMeshSources == null)
+                _runtimeNavMeshSources = new List<NavMeshBuildSource>(256);
+
+            Bounds bounds = GetRuntimeBounds();
+
+            AsyncOperation op = RuntimeNavMeshBuilder.RegenerateAsync(
+                data, bounds, NavMeshCollectGeometry.PhysicsColliders,
+                settings.collisionMask.value, settings.runtimeAgentTypeID, _runtimeNavMeshSources);
+
+            if (op == null)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[{name}] Runtime NavMesh regeneration не запустилась (data/sources = null).");
+                return;
+            }
+
+            while (!op.isDone)
+            {
+                token.ThrowIfCancellationRequested();
+                await Awaitable.NextFrameAsync(token);
+            }
+
+            UnityEngine.Debug.Log(
+                $"[{name}] Runtime NavMesh перегенерирован (agentTypeID={settings.runtimeAgentTypeID}).");
+        }
+
+        private Bounds GetRuntimeBounds()
+        {
+            Bounds b = settings.runtimeBounds;
+            if (b.size.sqrMagnitude < 1e-4f)
+                return new Bounds(transform.position, settings.dimensions * 2f);
+            return new Bounds(transform.TransformPoint(b.center), b.size);
         }
 
         private void CallGenerationCompleteExtensions()
         {
             for (int i = 0; i < settings.onGenerationCompleteExtensions.Count; i++)
             {
-                WorldGenerationExtension extension = settings.onGenerationCompleteExtensions[i];
-                if (extension != null)
-                    extension.OnGenerationComplete();
+                WorldGenerationExtension e = settings.onGenerationCompleteExtensions[i];
+                if (e != null) e.OnGenerationComplete();
             }
         }
+
+        // ─────────────────────── Clear / Reset ───────────────────────
 
         [ContextMenu("Clear Objects")]
         public void ClearAll()
         {
             StopGeneration();
-            while (transform.childCount > 0)
-                DestroyImmediate(transform.GetChild(0).gameObject);
+            while (transform.childCount > 0) DestroyImmediate(transform.GetChild(0).gameObject);
+            ResetGenerationState();
+        }
+
+        /// <summary>Сброс кэшей без удаления дочерних объектов (reuseExistingObjects).</summary>
+        private void ClearGenerationState()
+        {
+            StopGeneration();
+            ResetGenerationState();
+        }
+
+        private void ResetGenerationState()
+        {
             _placementCache.Clear();
             _totalPlacementAttempts = 0;
             _runtimeRetryCount = 0;
             ClearDebugRays();
             FailureStatistics.Clear();
+            _placementHash?.Clear();
+            _batchCandidates.Clear();
             _modulesInitialized = false;
         }
 
         private void StopGeneration()
         {
-            if (_generationAwaitable != null && !_generationAwaitable.IsCompleted)
-            {
-                _generationInProgress = false;
-                _generationAwaitable = null;
-            }
+            _generationCts?.Cancel();
+
 #if UNITY_EDITOR
-            EditorApplication.update -= AsyncGenerationUpdate;
-            SceneView.duringSceneGui -= OnSceneGUI;
+            EditorGenerationDriver.Stop(this);
 #endif
+
             _generationInProgress = false;
         }
 
-        private static void AddToRuntimeQueue(WorldGeneration spawner)
-        {
-            if (spawner == null || _runtimeSpawners.Contains(spawner)) return;
-            _runtimeSpawners.Add(spawner);
-
-            if (!_isRuntimeQueueProcessing)
-            {
-                _ = ProcessRuntimeQueueAsync();
-            }
-        }
-
-        private static async Awaitable ProcessRuntimeQueueAsync()
-        {
-            if (_isRuntimeQueueProcessing) return;
-            _isRuntimeQueueProcessing = true;
-
-            try
-            {
-                while (_runtimeSpawners.Count > 0)
-                {
-                    _runtimeSpawners.Sort((a, b) => b.settings.priority.CompareTo(a.settings.priority));
-
-                    WorldGeneration spawner = _runtimeSpawners[0];
-                    if (spawner != null && spawner.enabled && spawner.gameObject.activeInHierarchy)
-                    {
-                        if (spawner.settings.autoGenerateOnStart && spawner.settings.enableRuntimeGeneration)
-                        {
-                            await spawner.GenerateAsync();
-                        }
-                    }
-                    _runtimeSpawners.RemoveAt(0);
-                }
-            }
-            finally
-            {
-                _isRuntimeQueueProcessing = false;
-            }
-        }
+        // ─────────────────────── Editor-only ───────────────────────
 
 #if UNITY_EDITOR
-        private async void AsyncGenerationUpdate()
+        /// <summary>Один тик редакторной генерации. Вызывается EditorGenerationDriver.</summary>
+        internal void EditorTick()
         {
             if (!_generationInProgress) return;
             EnsureModulesInitialized();
+
             if (_pointGenerator == null || _placementValidator == null)
             {
-                Debug.LogError("Модули не инициализированы в AsyncGenerationUpdate.");
                 StopGeneration();
                 return;
             }
+
             if (_placementCache.Count < settings.population)
-            {
-                GeneratePlacementPointsBatch(PlacementAttemptsPerFrame);
-            }
+                GeneratePlacementPointsBatch(GetFrameBatchSize());
             else
+                _ = FinishEditorGenerationAsync();
+        }
+
+        private async Awaitable FinishEditorGenerationAsync()
+        {
+            try
             {
-                await CreateObjectsFromPlacementData();
+                await CreateObjectsFromPlacementData(CancellationToken.None);
                 CallGenerationCompleteExtensions();
                 OnGenerationComplete?.Invoke();
                 StopGeneration();
-                Debug.Log($"[{name}] Генерация в редакторе завершена. Создано объектов: {transform.childCount}");
+                UnityEngine.Debug.Log($"[{name}] Генерация завершена. Создано: {transform.childCount}");
             }
-            SceneView.RepaintAll();
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogException(e, this);
+                StopGeneration();
+            }
         }
 
-        private void OnSceneGUI(SceneView sceneView)
-        {
-            if (_generationInProgress) sceneView.Repaint();
-            else SceneView.duringSceneGui -= OnSceneGUI;
-        }
+        private void OnDrawGizmosSelected()
+            => WorldGenerationGizmos.Draw(settings, transform, _debugLogger, _pointGenerator);
 #endif
     }
 }

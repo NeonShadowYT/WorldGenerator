@@ -108,6 +108,7 @@
 | **Scale Range** | Random scale range (0.8–1.2 = 80%–120%). |
 | **Rotation Range** | Random rotation around Y axis. |
 | **Vertical Offset** | Landing height adjustment. |
+| **Surface Angle Range** | Allowed surface tilt range (X - minimum, Y - maximum). |
 
 <div align="center">
    
@@ -128,6 +129,19 @@
 - **Avoid Mask** - obstacle layers.
 - **Align To Surface** - auto-align to normal.
 - **Avoidance Radius** - obstacle check radius.
+- **Surface Angle Range** - allowed tilt range in degrees (X = min, Y = max). Set Y = 0 to disable the check.
+
+#### 🎯 Surface Angle Presets
+
+| Spawn target | Surface Angle Range | Typical objects |
+|--------------|---------------------|-----------------|
+| Floors, gentle slopes | `(0, 45)` | Trees, bushes, rocks, grass |
+| Walls, steep cliffs | `(60, 90)` | Torches, paintings, nests |
+| Ceilings | `(150, 180)` | Cave stalactites, lamps, vines |
+| Any surface | `(0, 180)` | Universal decoration |
+| Strict horizontal only | `(0, 5)` | Carpets, platforms, tiles |
+
+> Angle is measured from vertical: **0° = floor**, **90° = wall**, **180° = ceiling**.
 
 ### 📊 Stability Check
 
@@ -162,14 +176,112 @@
 - **Detailed error info**.
 - **Optimization tips** for your settings.
 
-## 🛠️ Project Structure
+## 🛠️ Project Architecture
 
-| Class | What it does |
-|-------|--------------|
-| `WorldGeneration` | Main generator component. |
-| `SpawnSettings` | Generation settings container. |
-| `PlacementCalculator` | Position calculation logic. |
-| `IPlacementStrategy` | Placement strategy interface. |
+```
+Assets/NeonImperium/WorldGenerations/
+├── Runtime/
+│   ├── Core/
+│   │   ├── WorldGeneration.cs               # MonoBehaviour facade, Editor + Runtime pipelines
+│   │   ├── GenerationSettings.cs            # SpawnSettings + DebugRaySettings
+│   │   ├── PlacementData.cs                 # Structs/enums: PlacementData, PlacementPoint, DebugRay
+│   │   ├── GenerationSnapshot.cs            # Save/load snapshot (FNV-1a + JsonUtility)
+│   │   └── WorldGenerationExtension.cs      # Base class for user extensions
+│   │
+│   ├── Interfaces/
+│   │   ├── IPlacementValidator.cs           # Single + batch validation
+│   │   ├── IPointGenerator.cs               # Candidate generation strategy
+│   │   ├── IPhysicsService.cs               # Physics abstraction (testable)
+│   │   ├── IDebugLogger.cs                  # Debug-ray logger abstraction
+│   │   └── ISpawnZone.cs                    # + BoxSpawnZone, PolygonSpawnZone, SpawnZoneBuilder
+│   │
+│   ├── Placement/
+│   │   ├── PlacementValidator.cs            # Ray/Sphere-cast, all checks, batch path
+│   │   ├── PlacementJobs.cs                 # Persistent NativeArray<RaycastCommand>
+│   │   ├── PointGenerator.cs                # RandomPointGenerator + ClusterPointGenerator
+│   │   ├── SpatialHash.cs                   # O(1) minDistance (3×3×3 cells)
+│   │   └── PolygonTriangulator.cs           # Ear-clipping, IsConvex — zero alloc
+│   │
+│   ├── Zones/
+│   │   ├── SpawnZoneTypes.cs                # BoxSpawnZoneSettings, PolygonVertex, PolygonSpawnZoneSettings
+│   │   └── SpawnZoneDefaults.cs             # Editor-only demo zones (Hexagon + Triangle)
+│   │
+│   ├── Services/
+│   │   ├── PhysicsService.cs                # IPhysicsService → Physics.*
+│   │   ├── DebugLogger.cs                   # Ring buffer DebugRay (256+)
+│   │   ├── ObjectInstantiator.cs            # 20 objects/frame batching, reuse-existing
+│   │   ├── RuntimeSpawnQueueService.cs      # Awaitable priority queue
+│   │   ├── NavMeshRegenerationService.cs    # Reflection to NavMeshSurface (no hard-dep)
+│   │   └── RuntimeNavMeshBuilder.cs         # NavMeshBuilder.CollectSources + UpdateNavMeshDataAsync
+│   │
+│   └── Utils/
+│       ├── FastRandom.cs                    # Xorshift128 PRNG, bias-free int/float
+│       └── MinMaxRangeAttributes.cs         # [MinMaxRange], [MinMaxRangeInt]
+│
+└── Editor/
+    ├── WorldGenerationView.cs               # CustomEditor, OnSceneGUI, RegenerateAll
+    ├── SectionDrawer.cs                     # 8 foldout inspector sections
+    ├── ActionButtonsDrawer.cs               # Generate/Clear/Preview/RegenerateAll
+    ├── DebugInfoDrawer.cs                   # Stats, failure reasons, tips
+    ├── EditorStyleManager.cs                # GUIStyle + tinted header texture
+    ├── EditorFoldoutState.cs                # Static foldout state
+    ├── EditorGenerationDriver.cs            # EditorApplication.update tick
+    ├── SpawnZoneSceneEditor.cs              # Handles: move/size/insert/delete + snap
+    ├── MinMaxRangeDrawers.cs                # Custom PropertyDrawer
+    └── WorldGenerationGizmos.cs             # Gizmos: zones, rays, clusters
+```
+
+### 🧩 Core subsystems
+
+| Subsystem | Responsibility |
+|-----------|----------------|
+| **PlacementValidator** | Ray/Sphere-cast, surface-angle, stability, ceiling, floor, avoidance and NavMesh checks. Single + Batch (RaycastCommand) paths. |
+| **PointGenerator** | Two strategies: `RandomPointGenerator` (uniform in zone) and `ClusterPointGenerator` (job-batched surface probing). |
+| **SpatialHash** | O(1) `minDistanceBetweenObjects` via `math.hash(int3)` or FNV fallback. |
+| **PlacementJobs** | Persistent `NativeArray<RaycastCommand>` — zero alloc, auto CPU fallback for Sphere casts. |
+| **SpawnZoneBuilder** | Zone list: Box (main + extraBoxes) or Polygon (concave 3D volumes). |
+| **PolygonTriangulator** | Ear-clipping + convexity in O(n²), stackalloc at n ≤ 64. |
+| **ObjectInstantiator** | 20 obj/frame batching, `Awaitable.NextFrameAsync`, reuseExisting (SetActive instead of Destroy). |
+| **RuntimeSpawnQueueService** | Global queue of `WorldGeneration` sorted by `priority`. |
+| **NavMeshRegenerationService** | Reflection → `Unity.AI.Navigation.NavMeshSurface.BuildNavMesh()`; no hard dependency. |
+| **RuntimeNavMeshBuilder** | `NavMeshBuilder.UpdateNavMeshDataAsync` — non-blocking main thread. |
+| **FastRandom** | Deterministic Xorshift128: ~5× faster than `System.Random`, no boxing. |
+| **GenerationSnapshot** | FNV-1a zone hash + JsonUtility for save/load and reproducibility. |
+
+### ⚙️ Runtime pipeline
+
+```
+Awake / Generate()
+  → EnsureModulesInitialized()
+  → GeneratePlacementPointsBatch()
+        ├─ CanUseJobValidation ? Job path (RaycastCommand.ScheduleBatch)
+        └─ else CPU path (Validate + SpatialHash.Insert)
+  → CreateObjectsFromPlacementData()  ← ObjectInstantiator.InstantiateBatchAsync
+  → TryRuntimeNavMeshRegenerationAsync()
+  → CallGenerationCompleteExtensions()
+  → OnGenerationComplete?.Invoke()
+```
+
+### 🎨 Editor pipeline
+
+```
+OnInspectorGUI
+  → SectionDrawer × 8          (all settings, foldouts)
+  → ActionButtonsDrawer        (Generate / Preview / RegenerateAll)
+  → DebugInfoDrawer            (stats + tips)
+
+OnSceneGUI
+  → SpawnZoneSceneEditor.DrawForSpawner()
+        • Move zone center (FreeMoveHandle)
+        • Move polygon vertices
+        • Vertical size slider
+        • Insert / Delete (Ctrl-snap)
+  → DrawPreview()              (up to 500 spheres: green/red)
+
+EditorGenerationDriver
+  → EditorApplication.update → WorldGeneration.EditorTick()
+  → SceneView.duringSceneGui → Repaint while generating
+```
 
 ## ⚡ Requirements
 
@@ -193,6 +305,22 @@
 **Why:** `Avoidance Radius` is too small or clustering is disabled.
 
 **Fix:** Increase `Avoidance Radius` or enable clustering with minimum distance settings.
+
+</details>
+
+<details>
+<summary><strong>📐 Objects spawn at the wrong angle</strong></summary>
+
+**Why:** `Surface Angle Range` doesn't match your scene's terrain.
+
+**Fix:**
+- Floors, slopes up to 45° → set `(0, 45)`.
+- Walls and cliffs → `(60, 90)`.
+- Ceilings, roofs → `(150, 180)`.
+- Any surface → `(0, 180)`.
+- Disable check → set max value to `0`.
+
+Open `📊 Debug Info` — the failure list will show `📐 Surface angle out of range` if the setting is blocking placement.
 
 </details>
 

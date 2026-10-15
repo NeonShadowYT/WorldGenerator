@@ -1,132 +1,164 @@
 using UnityEngine;
 using System.Collections.Generic;
+using Unity.Collections;
+using Unity.Jobs;
 
 namespace NeonImperium.WorldGenerations
 {
-    public class RandomPointGenerator : IPointGenerator
+    public sealed class RandomPointGenerator : IPointGenerator
     {
-        private SpawnSettings _settings;
-        private Transform _spawner;
-        private System.Random _random;
+        private FastRandom _rng;
+        private List<ISpawnZone> _zones;
 
-        public void Initialize(SpawnSettings settings, Transform spawner, IDebugLogger debugLogger, IPhysicsService physicsService, int seed)
+        public void Initialize(SpawnSettings settings, Transform spawner, IDebugLogger debugLogger,
+                               IPhysicsService physicsService, int seed, List<ISpawnZone> zones)
         {
-            _settings = settings;
-            _spawner = spawner;
-            _random = new System.Random(seed);
+            _rng = new FastRandom(seed);
+            _zones = zones;
         }
 
         public PlacementPoint GeneratePoint()
         {
-            float halfX = _settings.dimensions.x * 0.5f;
-            float halfZ = _settings.dimensions.z * 0.5f;
-            float x = (float)(_random.NextDouble() * 2.0 - 1.0) * halfX;
-            float z = (float)(_random.NextDouble() * 2.0 - 1.0) * halfZ;
-            return new PlacementPoint { localPosition = new Vector3(x, 0, z) };
+            if (_zones == null || _zones.Count == 0)
+                return new PlacementPoint { zoneIndex = -1 };
+
+            int idx = _rng.Next(_zones.Count);
+            Vector2 xz = _zones[idx].GetRandomXZ(_rng);
+            return new PlacementPoint
+            {
+                localPosition = new Vector3(xz.x, 0f, xz.y),
+                zoneIndex = idx
+            };
         }
 
         public bool HasMorePoints() => true;
         public int GetClusterCount() => 0;
     }
 
-    public class ClusterPointGenerator : IPointGenerator
+    public sealed class ClusterPointGenerator : IPointGenerator
     {
-        public class ClusterData
+        public sealed class ClusterData
         {
             public Vector3 center;
             public float radius;
+            public int zoneIndex;
         }
+
+        private const int CommandsPerJob = 64;
 
         private SpawnSettings _settings;
         private Transform _spawner;
-        private IPhysicsService _physicsService;
+        private List<ISpawnZone> _zones;
         private List<ClusterData> _clusters;
-        private System.Random _random;
+        private FastRandom _rng;
 
-        public void Initialize(SpawnSettings settings, Transform spawner, IDebugLogger debugLogger, IPhysicsService physicsService, int seed)
+        public void Initialize(SpawnSettings settings, Transform spawner, IDebugLogger debugLogger,
+                               IPhysicsService physicsService, int seed, List<ISpawnZone> zones)
         {
             _settings = settings;
             _spawner = spawner;
-            _physicsService = physicsService;
-            _random = new System.Random(seed);
+            _rng = new FastRandom(seed);
+            _zones = zones;
             _clusters = new List<ClusterData>();
             GenerateClusters();
         }
 
+        /// <summary>Батч RaycastCommand для поиска поверхностей под кандидатами кластеров.</summary>
         private void GenerateClusters()
         {
             _clusters.Clear();
-            float halfX = _settings.dimensions.x * 0.5f;
-            float halfZ = _settings.dimensions.z * 0.5f;
-            int attempts = 0;
-            int maxClusterAttempts = _settings.clusterCount * 100;
-            int clustersCreated = 0;
+            if (_zones == null || _zones.Count == 0) return;
+
             int targetClusters = Mathf.Min(_settings.clusterCount, _settings.population);
+            if (targetClusters <= 0) return;
 
-            RaycastHit[] hitBuffer = new RaycastHit[1];
+            int maxAttempts = _settings.clusterCount * 100;
+            if (maxAttempts < targetClusters) maxAttempts = targetClusters;
 
-            while (clustersCreated < targetClusters && attempts++ < maxClusterAttempts)
+            NativeArray<RaycastCommand> commands = new NativeArray<RaycastCommand>(maxAttempts, Allocator.TempJob);
+            NativeArray<RaycastHit> results = new NativeArray<RaycastHit>(maxAttempts, Allocator.TempJob);
+            int[] zoneIndices = new int[maxAttempts];
+
+            try
             {
-                float x = (float)(_random.NextDouble() * 2.0 - 1.0) * halfX;
-                float z = (float)(_random.NextDouble() * 2.0 - 1.0) * halfZ;
-                Vector3 localCandidate = new Vector3(x, 0, z);
-                Vector3 worldCandidate = _spawner.TransformPoint(localCandidate);
-                Vector3 rayStart = worldCandidate + Vector3.up * _settings.dimensions.y;
+                QueryParameters queryParams = new QueryParameters { layerMask = _settings.collisionMask };
 
-                int hitCount = _physicsService.RaycastNonAlloc(rayStart, Vector3.down, hitBuffer, _settings.dimensions.y * 2, _settings.collisionMask);
-                if (hitCount > 0)
+                for (int i = 0; i < maxAttempts; i++)
                 {
-                    Vector3 surfacePosition = hitBuffer[0].point;
-                    Vector3 localSurface = _spawner.InverseTransformPoint(surfacePosition);
-                    bool validPosition = true;
-                    for (int i = 0; i < _clusters.Count; i++)
+                    int zoneIdx = _rng.Next(_zones.Count);
+                    ISpawnZone zone = _zones[zoneIdx];
+                    Vector2 xz = zone.GetRandomXZ(_rng);
+                    Vector3 rayStart = _spawner.TransformPoint(new Vector3(xz.x, zone.RayStartY, xz.y));
+
+                    commands[i] = new RaycastCommand(rayStart, Vector3.down, queryParams, zone.RayDistance);
+                    zoneIndices[i] = zoneIdx;
+                }
+
+                RaycastCommand.ScheduleBatch(commands, results, CommandsPerJob, 1).Complete();
+
+                float minClusterDist = _settings.minDistanceBetweenClusters;
+                float minClusterDistSq = minClusterDist * minClusterDist;
+                float rMin = _settings.clusterRadiusRange.x;
+                float rRange = _settings.clusterRadiusRange.y - rMin;
+
+                int clustersCreated = 0;
+                for (int i = 0; i < maxAttempts && clustersCreated < targetClusters; i++)
+                {
+                    RaycastHit hit = results[i];
+                    if (hit.collider == null) continue;
+
+                    Vector3 localSurface = _spawner.InverseTransformPoint(hit.point);
+
+                    bool valid = true;
+                    for (int j = 0; j < _clusters.Count; j++)
                     {
-                        if (Vector3.Distance(localSurface, _clusters[i].center) < _settings.minDistanceBetweenClusters)
+                        if ((localSurface - _clusters[j].center).sqrMagnitude < minClusterDistSq)
                         {
-                            validPosition = false;
+                            valid = false;
                             break;
                         }
                     }
-                    if (validPosition)
+                    if (!valid) continue;
+
+                    _clusters.Add(new ClusterData
                     {
-                        ClusterData newCluster = new ClusterData
-                        {
-                            center = localSurface,
-                            radius = (float)(_random.NextDouble() * (_settings.clusterRadiusRange.y - _settings.clusterRadiusRange.x) + _settings.clusterRadiusRange.x)
-                        };
-                        _clusters.Add(newCluster);
-                        clustersCreated++;
-                    }
+                        center = localSurface,
+                        radius = _rng.Range(rMin, rMin + rRange),
+                        zoneIndex = zoneIndices[i]
+                    });
+                    clustersCreated++;
                 }
+            }
+            finally
+            {
+                commands.Dispose();
+                results.Dispose();
             }
         }
 
+        /// <summary>Одна попытка. Ретраи делегированы внешнему циклу WorldGeneration.</summary>
         public PlacementPoint GeneratePoint()
         {
             if (_clusters == null || _clusters.Count == 0)
-                return new PlacementPoint { localPosition = Vector3.zero };
+                return new PlacementPoint { zoneIndex = -1 };
 
-            int attempts = 0;
-            const int maxAttempts = 20;
-            while (attempts++ < maxAttempts)
+            int idx = _rng.Next(_clusters.Count);
+            ClusterData cluster = _clusters[idx];
+            ISpawnZone zone = _zones[cluster.zoneIndex];
+
+            float angle = _rng.Range(0f, 2f * Mathf.PI);
+            float radius = _rng.Range(cluster.radius);
+            float x = cluster.center.x + Mathf.Cos(angle) * radius;
+            float z = cluster.center.z + Mathf.Sin(angle) * radius;
+
+            if (!zone.ContainsXZ(x, z))
+                return new PlacementPoint { zoneIndex = -1 };
+
+            return new PlacementPoint
             {
-                int idx = _random.Next(_clusters.Count);
-                ClusterData cluster = _clusters[idx];
-
-                float angle = (float)(_random.NextDouble() * 2.0 * Mathf.PI);
-                float radius = (float)(_random.NextDouble() * cluster.radius);
-                Vector2 randomPoint = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
-                Vector3 localPos = cluster.center + new Vector3(randomPoint.x, 0, randomPoint.y);
-
-                float halfX = _settings.dimensions.x * 0.5f;
-                float halfZ = _settings.dimensions.z * 0.5f;
-                if (Mathf.Abs(localPos.x) > halfX || Mathf.Abs(localPos.z) > halfZ)
-                    continue;
-
-                return new PlacementPoint { localPosition = localPos };
-            }
-
-            return new PlacementPoint { localPosition = Vector3.zero };
+                localPosition = new Vector3(x, 0f, z),
+                zoneIndex = cluster.zoneIndex
+            };
         }
 
         public bool HasMorePoints() => _clusters != null && _clusters.Count > 0;

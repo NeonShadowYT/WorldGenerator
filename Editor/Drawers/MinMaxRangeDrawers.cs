@@ -9,7 +9,7 @@ namespace NeonImperium.WorldGenerations
     {
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            var rangeAttribute = (MinMaxRangeAttribute)attribute;
+            MinMaxRangeAttribute rangeAttribute = (MinMaxRangeAttribute)attribute;
             
             if (property.propertyType == SerializedPropertyType.Vector2)
             {
@@ -19,18 +19,39 @@ namespace NeonImperium.WorldGenerations
                 
                 EditorGUI.BeginChangeCheck();
                 
-                Rect labelRect = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
-                string displayText = $"{label.text} ({min.ToString(rangeAttribute.Format)} - {max.ToString(rangeAttribute.Format)})";
-                EditorGUI.LabelField(labelRect, displayText);
+                Rect controlRect = EditorGUI.PrefixLabel(position, new GUIContent(label.text, label.tooltip));
                 
-                Rect minRect = new Rect(position.x, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
-                Rect maxRect = new Rect(position.x + position.width / 2 + 5, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
+                const float fieldWidth = 60f;
+                const float spacing = 6f;
+                float minRequiredWidth = fieldWidth * 2f + spacing * 2f + 20f;
+                bool useTwoLines = controlRect.width < minRequiredWidth;
                 
-                min = EditorGUI.FloatField(minRect, min);
-                max = EditorGUI.FloatField(maxRect, max);
-                
-                Rect sliderRect = new Rect(position.x, position.y + 40, position.width, EditorGUIUtility.singleLineHeight);
-                EditorGUI.MinMaxSlider(sliderRect, ref min, ref max, rangeAttribute.Min, rangeAttribute.Max);
+                if (useTwoLines)
+                {
+                    float y = position.y + EditorGUIUtility.singleLineHeight + 2f;
+                    float totalWidth = position.width;
+                    float fieldWidthTwo = Mathf.Min(fieldWidth, 50f);
+                    float sliderWidth = totalWidth - fieldWidthTwo * 2f - spacing * 2f;
+                    if (sliderWidth < 20f) sliderWidth = 20f;
+                    
+                    Rect minFieldRect = new Rect(position.x, y, fieldWidthTwo, EditorGUIUtility.singleLineHeight);
+                    Rect sliderRect = new Rect(position.x + fieldWidthTwo + spacing, y, sliderWidth, EditorGUIUtility.singleLineHeight);
+                    Rect maxFieldRect = new Rect(position.x + totalWidth - fieldWidthTwo, y, fieldWidthTwo, EditorGUIUtility.singleLineHeight);
+                    
+                    min = EditorGUI.FloatField(minFieldRect, min);
+                    max = EditorGUI.FloatField(maxFieldRect, max);
+                    EditorGUI.MinMaxSlider(sliderRect, ref min, ref max, rangeAttribute.Min, rangeAttribute.Max);
+                }
+                else
+                {
+                    Rect minFieldRect = new Rect(controlRect.x, controlRect.y, fieldWidth, EditorGUIUtility.singleLineHeight);
+                    Rect sliderRect = new Rect(controlRect.x + fieldWidth + spacing, controlRect.y, controlRect.width - fieldWidth * 2f - spacing * 2f, EditorGUIUtility.singleLineHeight);
+                    Rect maxFieldRect = new Rect(controlRect.x + controlRect.width - fieldWidth, controlRect.y, fieldWidth, EditorGUIUtility.singleLineHeight);
+                    
+                    min = EditorGUI.FloatField(minFieldRect, min);
+                    max = EditorGUI.FloatField(maxFieldRect, max);
+                    EditorGUI.MinMaxSlider(sliderRect, ref min, ref max, rangeAttribute.Min, rangeAttribute.Max);
+                }
                 
                 if (EditorGUI.EndChangeCheck())
                 {
@@ -48,7 +69,13 @@ namespace NeonImperium.WorldGenerations
         
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
-            return EditorGUIUtility.singleLineHeight * 3;
+            float viewWidth = EditorGUIUtility.currentViewWidth;
+            float labelWidth = EditorGUIUtility.labelWidth;
+            float controlWidth = viewWidth - labelWidth - 20f;
+            if (controlWidth < 200f)
+                return EditorGUIUtility.singleLineHeight * 2f + 2f;
+            else
+                return EditorGUIUtility.singleLineHeight;
         }
     }
 
@@ -57,7 +84,7 @@ namespace NeonImperium.WorldGenerations
     {
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            var rangeAttribute = (MinMaxRangeIntAttribute)attribute;
+            MinMaxRangeIntAttribute rangeAttribute = (MinMaxRangeIntAttribute)attribute;
             
             if (property.propertyType == SerializedPropertyType.Vector2Int)
             {
@@ -67,23 +94,51 @@ namespace NeonImperium.WorldGenerations
                 
                 EditorGUI.BeginChangeCheck();
                 
-                Rect labelRect = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
-                string displayText = $"{label.text} ({min} - {max})";
-                EditorGUI.LabelField(labelRect, displayText);
+                Rect controlRect = EditorGUI.PrefixLabel(position, new GUIContent(label.text, label.tooltip));
                 
-                Rect minRect = new Rect(position.x, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
-                Rect maxRect = new Rect(position.x + position.width / 2 + 5, position.y + 20, position.width / 2 - 5, EditorGUIUtility.singleLineHeight);
+                const float fieldWidth = 60f;
+                const float spacing = 6f;
+                float minRequiredWidth = fieldWidth * 2f + spacing * 2f + 20f;
+                bool useTwoLines = controlRect.width < minRequiredWidth;
                 
-                min = EditorGUI.IntField(minRect, min);
-                max = EditorGUI.IntField(maxRect, max);
-                
-                float minFloat = min;
-                float maxFloat = max;
-                Rect sliderRect = new Rect(position.x, position.y + 40, position.width, EditorGUIUtility.singleLineHeight);
-                EditorGUI.MinMaxSlider(sliderRect, ref minFloat, ref maxFloat, rangeAttribute.Min, rangeAttribute.Max);
-                
-                min = Mathf.RoundToInt(minFloat);
-                max = Mathf.RoundToInt(maxFloat);
+                if (useTwoLines)
+                {
+                    float y = position.y + EditorGUIUtility.singleLineHeight + 2f;
+                    float totalWidth = position.width;
+                    float fieldWidthTwo = Mathf.Min(fieldWidth, 50f);
+                    float sliderWidth = totalWidth - fieldWidthTwo * 2f - spacing * 2f;
+                    if (sliderWidth < 20f) sliderWidth = 20f;
+                    
+                    Rect minFieldRect = new Rect(position.x, y, fieldWidthTwo, EditorGUIUtility.singleLineHeight);
+                    Rect sliderRect = new Rect(position.x + fieldWidthTwo + spacing, y, sliderWidth, EditorGUIUtility.singleLineHeight);
+                    Rect maxFieldRect = new Rect(position.x + totalWidth - fieldWidthTwo, y, fieldWidthTwo, EditorGUIUtility.singleLineHeight);
+                    
+                    min = EditorGUI.IntField(minFieldRect, min);
+                    max = EditorGUI.IntField(maxFieldRect, max);
+                    
+                    float minFloat = min;
+                    float maxFloat = max;
+                    EditorGUI.MinMaxSlider(sliderRect, ref minFloat, ref maxFloat, rangeAttribute.Min, rangeAttribute.Max);
+                    
+                    min = Mathf.RoundToInt(minFloat);
+                    max = Mathf.RoundToInt(maxFloat);
+                }
+                else
+                {
+                    Rect minFieldRect = new Rect(controlRect.x, controlRect.y, fieldWidth, EditorGUIUtility.singleLineHeight);
+                    Rect sliderRect = new Rect(controlRect.x + fieldWidth + spacing, controlRect.y, controlRect.width - fieldWidth * 2f - spacing * 2f, EditorGUIUtility.singleLineHeight);
+                    Rect maxFieldRect = new Rect(controlRect.x + controlRect.width - fieldWidth, controlRect.y, fieldWidth, EditorGUIUtility.singleLineHeight);
+                    
+                    min = EditorGUI.IntField(minFieldRect, min);
+                    max = EditorGUI.IntField(maxFieldRect, max);
+                    
+                    float minFloat = min;
+                    float maxFloat = max;
+                    EditorGUI.MinMaxSlider(sliderRect, ref minFloat, ref maxFloat, rangeAttribute.Min, rangeAttribute.Max);
+                    
+                    min = Mathf.RoundToInt(minFloat);
+                    max = Mathf.RoundToInt(maxFloat);
+                }
                 
                 if (EditorGUI.EndChangeCheck())
                 {
@@ -101,7 +156,13 @@ namespace NeonImperium.WorldGenerations
         
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
-            return EditorGUIUtility.singleLineHeight * 3;
+            float viewWidth = EditorGUIUtility.currentViewWidth;
+            float labelWidth = EditorGUIUtility.labelWidth;
+            float controlWidth = viewWidth - labelWidth - 20f;
+            if (controlWidth < 200f)
+                return EditorGUIUtility.singleLineHeight * 2f + 2f;
+            else
+                return EditorGUIUtility.singleLineHeight;
         }
     }
 }

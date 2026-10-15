@@ -15,15 +15,15 @@ namespace NeonImperium.WorldGenerations
             if (spawner == null) return;
 
             EditorGUILayout.BeginVertical("box");
-                
+
             // Rich Text для первого Foldout
             Color textColor = styleManager.CurrentHeaderColor;
             string colorHex = ColorUtility.ToHtmlStringRGB(textColor);
             string displayName = $"📊 <color=#{colorHex}>Дебаг информация</color>";
             GUIContent contentLabel = new GUIContent(displayName);
-            
+
             showDebugInfo = EditorGUILayout.Foldout(showDebugInfo, contentLabel, styleManager.FoldoutStyle);
-            
+
             if (showDebugInfo)
             {
                 EditorGUI.indentLevel++;
@@ -31,10 +31,10 @@ namespace NeonImperium.WorldGenerations
 
                 EditorGUILayout.LabelField("📈 Статус:", spawner.IsGenerating ? "🔄 Генерация..." : "✅ Готов");
                 EditorGUILayout.Space(3f);
-                
+
                 EditorGUILayout.LabelField("🎯 Объектов создано:", $"{spawner.SpawnedCount} / {spawner.settings.population}");
                 EditorGUILayout.Space(3f);
-                
+
                 EditorGUILayout.LabelField("🎲 Успешные попытки:", $"{spawner.ValidPlacementCount} / {spawner.TotalPlacementAttempts}");
                 EditorGUILayout.Space(3f);
 
@@ -57,13 +57,13 @@ namespace NeonImperium.WorldGenerations
                     {
                         EditorGUILayout.Space(3f);
                         EditorGUILayout.LabelField("❌ Причины ошибок:", EditorStyles.boldLabel);
-                        
+
                         List<KeyValuePair<FailureReasonType, int>> sortedReasons = new List<KeyValuePair<FailureReasonType, int>>();
                         foreach (KeyValuePair<FailureReasonType, int> kvp in spawner.FailureStatistics)
                         {
                             sortedReasons.Add(kvp);
                         }
-                        
+
                         for (int i = 0; i < sortedReasons.Count - 1; i++)
                         {
                             for (int j = 0; j < sortedReasons.Count - i - 1; j++)
@@ -92,7 +92,7 @@ namespace NeonImperium.WorldGenerations
                             {
                                 EditorGUILayout.Space(3f);
                                 string advice = GetAdviceForReason(topReason.Key);
-                                
+
                                 if (topReason.Key == FailureReasonType.EdgeCheck)
                                 {
                                     EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
@@ -104,6 +104,22 @@ namespace NeonImperium.WorldGenerations
                                         $"• Увеличьте maxHeightDifference до 0.3-0.5 метра\n" +
                                         $"• Уменьшите stabilityCheckRays до 4 для скорости\n" +
                                         $"• Или отключите проверку стабильности (edgeCheckRadius = 0)",
+                                        styleManager.MiniLabelStyle
+                                    );
+                                    EditorGUILayout.EndVertical();
+                                }
+                                else if (topReason.Key == FailureReasonType.InvalidSurfaceAngle)
+                                {
+                                    EditorGUILayout.BeginVertical(styleManager.HelpBoxStyle);
+                                    EditorGUILayout.LabelField(
+                                        $"⚠️ <b>ОСНОВНАЯ ПРОБЛЕМА: УГОЛ ПОВЕРХНОСТИ ВНЕ ДИАПАЗОНА</b>\n" +
+                                        $"Обнаружено {topReason.Value} отказов — surfaceAngleRange не соответствует рельефу сцены.\n\n" +
+                                        $"💡 <b>Рекомендации:</b>\n" +
+                                        $"• Полы / пологие склоны   → surfaceAngleRange = (0, 45)\n" +
+                                        $"• Стены и сильные уклоны  → surfaceAngleRange = (60, 90)\n" +
+                                        $"• Потолки / нависания     → surfaceAngleRange = (150, 180)\n" +
+                                        $"• Любая поверхность       → surfaceAngleRange = (0, 180)\n" +
+                                        $"• Отключить проверку угла → максимум = 0",
                                         styleManager.MiniLabelStyle
                                     );
                                     EditorGUILayout.EndVertical();
@@ -157,7 +173,7 @@ namespace NeonImperium.WorldGenerations
                 {
                     EditorGUILayout.Space(3f);
                     EditorGUILayout.LabelField("🔦 Лучей отладки:", $"{spawner.debugRays.Count}");
-                    
+
                     Dictionary<DebugRayType, int> rayStats = new Dictionary<DebugRayType, int>();
                     for (int i = 0; i < spawner.debugRays.Count; i++)
                     {
@@ -171,7 +187,7 @@ namespace NeonImperium.WorldGenerations
                             rayStats[rayType] = 1;
                         }
                     }
-                    
+
                     EditorGUILayout.LabelField("📊 Статистика лучей:", EditorStyles.boldLabel);
                     foreach (KeyValuePair<DebugRayType, int> stat in rayStats)
                     {
@@ -181,13 +197,13 @@ namespace NeonImperium.WorldGenerations
                         EditorGUILayout.EndHorizontal();
                     }
                 }
-                
+
                 if (spawner.settings.useClustering)
                 {
                     EditorGUILayout.Space(3f);
                     int clusterCount = spawner.GetClusterCentersCount();
                     EditorGUILayout.LabelField("🎯 Кластеров создано:", $"{clusterCount}/{spawner.settings.clusterCount}");
-                    
+
                     if (clusterCount < spawner.settings.clusterCount)
                     {
                         EditorGUILayout.Space(3f);
@@ -209,7 +225,7 @@ namespace NeonImperium.WorldGenerations
                 EditorGUILayout.EndVertical();
                 EditorGUI.indentLevel--;
             }
-            
+
             EditorGUILayout.EndVertical();
         }
 
@@ -301,35 +317,27 @@ namespace NeonImperium.WorldGenerations
                 FailureReasonType.OutOfBounds => "📏 Вне зоны спавна",
                 FailureReasonType.TooCloseToOther => "🔗 Близко к другим объектам",
                 FailureReasonType.ClusterFailed => "🎯 Ошибка кластеризации",
+                FailureReasonType.InvalidSurfaceAngle => "📐 Угол поверхности вне диапазона",
                 _ => "❓ Неизвестная ошибка",
             };
         }
 
         private string GetAdviceForReason(FailureReasonType reason)
         {
-            switch (reason)
+            return reason switch
             {
-                case FailureReasonType.NoHit: 
-                    return "Увеличьте высоту луча, проверьте Collision Mask";
-                case FailureReasonType.CeilingCheck: 
-                    return "Отключите checkCeiling или уменьшите высоту";
-                case FailureReasonType.EdgeCheck: 
-                    return "Уменьшите edgeCheckRadius, увеличьте maxHeightDifference или отключите проверку";
-                case FailureReasonType.FloorCheck: 
-                    return "Уменьшите floorCheckDistance или настройте avoidMask";
-                case FailureReasonType.NearObstacle: 
-                    return "Уменьшите avoidanceRadius или настройте avoidMask";
-                case FailureReasonType.InvalidLayer: 
-                    return "Проверьте collisionMask и avoidMask";
-                case FailureReasonType.OutOfBounds: 
-                    return "Увеличьте dimensions спавнера";
-                case FailureReasonType.TooCloseToOther: 
-                    return "Уменьшите minDistanceBetweenObjects";
-                case FailureReasonType.ClusterFailed: 
-                    return "Уменьшите clusterCount или minDistanceBetweenClusters";
-                default: 
-                    return "Проверьте настройки генерации";
-            }
+                FailureReasonType.NoHit => "Увеличьте высоту луча, проверьте Collision Mask",
+                FailureReasonType.CeilingCheck => "Отключите checkCeiling или уменьшите высоту",
+                FailureReasonType.EdgeCheck => "Уменьшите edgeCheckRadius, увеличьте maxHeightDifference или отключите проверку",
+                FailureReasonType.FloorCheck => "Уменьшите floorCheckDistance или настройте avoidMask",
+                FailureReasonType.NearObstacle => "Уменьшите avoidanceRadius или настройте avoidMask",
+                FailureReasonType.InvalidLayer => "Проверьте collisionMask и avoidMask",
+                FailureReasonType.OutOfBounds => "Увеличьте dimensions спавнера",
+                FailureReasonType.TooCloseToOther => "Уменьшите minDistanceBetweenObjects",
+                FailureReasonType.ClusterFailed => "Уменьшите clusterCount или minDistanceBetweenClusters",
+                FailureReasonType.InvalidSurfaceAngle => "Настройте surfaceAngleRange: (0, 45) — полы; (60, 90) — стены; (150, 180) — потолки; (0, 180) — любое",
+                _ => "Проверьте настройки генерации",
+            };
         }
     }
 }

@@ -7,30 +7,32 @@ namespace NeonImperium.WorldGenerations
 {
     public class ActionButtonsDrawer
     {
-        public void DrawActionButtons(WorldGenerationView view, Object[] targets, 
+        public void DrawActionButtons(WorldGenerationView view, Object[] targets,
             ref bool isRegeneratingAll, ref int currentSpawnerIndex, ref int totalSpawners, ref List<WorldGeneration> allSpawners,
             EditorStyleManager styleManager)
         {
             bool anyGenerating = false;
             bool anyHaveObjects = false;
+            bool anyHavePreview = false;
             bool masksConflict = false;
 
             for (int i = 0; i < targets.Length; i++)
             {
                 WorldGeneration spawner = targets[i] as WorldGeneration;
+                if (spawner == null) continue;
                 if (spawner.IsGenerating) anyGenerating = true;
                 if (spawner.transform.childCount > 0) anyHaveObjects = true;
-                if (spawner.settings.avoidMask.value == spawner.settings.collisionMask.value && 
+                if (spawner.PreviewCache != null && spawner.PreviewCache.Count > 0) anyHavePreview = true;
+                if (spawner.settings.avoidMask.value == spawner.settings.collisionMask.value &&
                     spawner.settings.avoidMask.value != 0)
                 {
                     masksConflict = true;
                 }
             }
-            
+
             if (masksConflict)
             {
                 EditorGUILayout.BeginVertical("box");
-                // Кастомный блок с rich-текстом вместо HelpBox
                 GUIStyle labelStyle = new(EditorStyles.label)
                 {
                     wordWrap = true,
@@ -45,38 +47,48 @@ namespace NeonImperium.WorldGenerations
                 EditorGUILayout.EndVertical();
                 GUI.enabled = false;
             }
-            
+
             EditorGUILayout.BeginHorizontal();
             {
                 if (anyGenerating)
                 {
-                    if (DrawButton(" ⏹️ Остановить", "Прервать текущую генерацию")) 
+                    if (DrawButton(" ⏹️ Остановить", "Прервать текущую генерацию"))
                         view.CancelAllGenerations();
                 }
                 else
                 {
-                    if (DrawButton(" 🎲 Сгенерировать", "Начать создание объектов")) 
+                    if (DrawButton(" 🎲 Сгенерировать", "Начать создание объектов"))
                         view.GenerateSelected();
-                    if (anyHaveObjects && DrawButton(" 🗑️ Очистить", "Удалить все созданные объекты")) 
+                    if (anyHaveObjects && DrawButton(" 🗑️ Очистить", "Удалить все созданные объекты"))
                         view.ClearSelected();
                 }
             }
             EditorGUILayout.EndHorizontal();
 
             if (masksConflict) GUI.enabled = true;
-            
+
+            EditorGUILayout.BeginHorizontal();
+            {
+                if (DrawButton(" 👁️ Предпросмотр", "Показать валидные точки без создания объектов"))
+                    GeneratePreviewForTargets(targets);
+
+                if (anyHavePreview && DrawButton(" 🧹 Очистить превью", "Убрать точки предпросмотра"))
+                    ClearPreviewForTargets(targets);
+            }
+            EditorGUILayout.EndHorizontal();
+
             if (isRegeneratingAll)
             {
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.BeginVertical("box");
                 float progress = (float)currentSpawnerIndex / totalSpawners;
                 Rect rect = EditorGUILayout.GetControlRect(false, 20);
-                
-                string spawnerName = currentSpawnerIndex < totalSpawners 
-                    ? allSpawners[currentSpawnerIndex].name 
+
+                string spawnerName = currentSpawnerIndex < totalSpawners
+                    ? allSpawners[currentSpawnerIndex].name
                     : "Завершение...";
-                
-                EditorGUI.ProgressBar(rect, progress, 
+
+                EditorGUI.ProgressBar(rect, progress,
                     $"🔄 Перегенерация: {currentSpawnerIndex}/{totalSpawners} ({progress:P0}) - {spawnerName}");
                 EditorGUILayout.EndVertical();
             }
@@ -88,10 +100,32 @@ namespace NeonImperium.WorldGenerations
                     view.RegenerateAllSpawners();
                 }
             }
-            
+
             EditorGUILayout.Space(4f);
         }
-        
+
+        private static void GeneratePreviewForTargets(Object[] targets)
+        {
+            for (int i = 0; i < targets.Length; i++)
+            {
+                WorldGeneration s = targets[i] as WorldGeneration;
+                if (s == null) continue;
+                s.GeneratePreview();
+            }
+            SceneView.RepaintAll();
+        }
+
+        private static void ClearPreviewForTargets(Object[] targets)
+        {
+            for (int i = 0; i < targets.Length; i++)
+            {
+                WorldGeneration s = targets[i] as WorldGeneration;
+                if (s == null) continue;
+                s.ClearPreview();
+            }
+            SceneView.RepaintAll();
+        }
+
         private bool DrawButton(string text, string tooltip)
         {
             GUIStyle style = new(EditorStyles.miniButton)
@@ -102,9 +136,9 @@ namespace NeonImperium.WorldGenerations
                 fontStyle = FontStyle.Bold,
                 fontSize = 12
             };
-            
+
             return GUILayout.Button(
-                new GUIContent(text, tooltip), 
+                new GUIContent(text, tooltip),
                 style
             );
         }

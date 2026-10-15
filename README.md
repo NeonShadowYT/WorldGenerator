@@ -32,6 +32,7 @@
 | Фича | Что даёт |
 |------|----------|
 | 🎯 **Умное размещение** | Автообнаружение поверхностей, избегание препятствий, проверка потолков/полов. |
+| 📐 **Диапазон углов поверхности** | Спавн строго на полу, стенах или потолках — настраивается парой min/max. |
 | 🌳 **Кластеризация** | Естественные группы объектов с настраиваемой плотностью и размером. |
 | 🔦 **Гибкие лучи** | Обычные и сферические лучи, настраиваемые точки испускания, визуализация. |
 | 📊 **Полная отладка** | Статистика эффективности, визуализация лучей, советы по оптимизации. |
@@ -108,6 +109,7 @@
 | **Scale Range** | Диапазон случайного масштаба (0.8–1.2 = 80%–120%). |
 | **Rotation Range** | Случайное вращение вокруг оси Y. |
 | **Vertical Offset** | Корректировка высоты посадки. |
+| **Surface Angle Range** | Диапазон допустимых углов наклона поверхности (X — минимум, Y — максимум). |
 
 <div align="center">
    
@@ -128,6 +130,19 @@
 - **Avoid Mask** - слои препятствий.
 - **Align To Surface** - автовыравнивание по нормали.
 - **Avoidance Radius** - радиус проверки препятствий.
+- **Surface Angle Range** - диапазон допустимых углов наклона поверхности (градусы, X = min, Y = max). Y = 0 — проверка отключена.
+
+#### 🎯 Пресеты углов поверхности
+
+| Цель спавна | Surface Angle Range | Что спавнится |
+|-------------|---------------------|---------------|
+| Полы, пологие склоны | `(0, 45)` | Деревья, кусты, камни, трава |
+| Стены и сильные уклоны | `(60, 90)` | Факелы, картины, гнёзда |
+| Потолки | `(150, 180)` | Пещерные сталактиты, лампы, лианы |
+| Любая поверхность | `(0, 180)` | Универсальный декор |
+| Только горизонталь (строго) | `(0, 5)` | Ковры, платформы, тайлы |
+
+> Угол считается от вертикали: **0° = пол**, **90° = стена**, **180° = потолок**.
 
 ### 📊 Проверка стабильности
 
@@ -162,14 +177,112 @@
 - **Детальная информация об ошибках**.
 - **Советы по оптимизации** настроек.
 
-## 🛠️ Структура проекта
+## 🛠️ Архитектура проекта
 
-| Класс | Что делает |
-|-------|------------|
-| `WorldGeneration` | Основной компонент генератора. |
-| `SpawnSettings` | Настройки генерации. |
-| `PlacementCalculator` | Логика расчёта позиций. |
-| `IPlacementStrategy` | Интерфейс стратегий размещения. |
+```
+Assets/NeonImperium/WorldGenerations/
+├── Runtime/
+│   ├── Core/
+│   │   ├── WorldGeneration.cs               # MonoBehaviour-фасад, Editor + Runtime пайплайны
+│   │   ├── GenerationSettings.cs            # SpawnSettings + DebugRaySettings
+│   │   ├── PlacementData.cs                 # Structs/enums: PlacementData, PlacementPoint, DebugRay
+│   │   ├── GenerationSnapshot.cs            # Save/load слепок (FNV-1a + JsonUtility)
+│   │   └── WorldGenerationExtension.cs      # Базовый класс user-расширений
+│   │
+│   ├── Interfaces/
+│   │   ├── IPlacementValidator.cs           # Single + batch валидация
+│   │   ├── IPointGenerator.cs               # Стратегия генерации кандидатов
+│   │   ├── IPhysicsService.cs               # Абстракция физики (тестируемость)
+│   │   ├── IDebugLogger.cs                  # Абстракция логгера лучей
+│   │   └── ISpawnZone.cs                    # + BoxSpawnZone, PolygonSpawnZone, SpawnZoneBuilder
+│   │
+│   ├── Placement/
+│   │   ├── PlacementValidator.cs            # Ray/Sphere-cast, все проверки, batch-путь
+│   │   ├── PlacementJobs.cs                 # Persistent NativeArray<RaycastCommand>
+│   │   ├── PointGenerator.cs                # RandomPointGenerator + ClusterPointGenerator
+│   │   ├── SpatialHash.cs                   # O(1) проверка minDistance (3×3×3 ячеек)
+│   │   └── PolygonTriangulator.cs           # Ear-clipping, IsConvex — без аллокаций
+│   │
+│   ├── Zones/
+│   │   ├── SpawnZoneTypes.cs                # BoxSpawnZoneSettings, PolygonVertex, PolygonSpawnZoneSettings
+│   │   └── SpawnZoneDefaults.cs             # Editor-only демо-зоны (Hexagon + Triangle)
+│   │
+│   ├── Services/
+│   │   ├── PhysicsService.cs                # IPhysicsService → Physics.*
+│   │   ├── DebugLogger.cs                   # Кольцевой буфер DebugRay (256+)
+│   │   ├── ObjectInstantiator.cs            # Батчинг по 20/кадр, reuse-existing
+│   │   ├── RuntimeSpawnQueueService.cs      # Awaitable-очередь с приоритетами
+│   │   ├── NavMeshRegenerationService.cs    # Reflection к NavMeshSurface (без hard-dep)
+│   │   └── RuntimeNavMeshBuilder.cs         # NavMeshBuilder.CollectSources + UpdateNavMeshDataAsync
+│   │
+│   └── Utils/
+│       ├── FastRandom.cs                    # Xorshift128 PRNG, bias-free int/float
+│       └── MinMaxRangeAttributes.cs         # [MinMaxRange], [MinMaxRangeInt]
+│
+└── Editor/
+    ├── WorldGenerationView.cs               # CustomEditor, OnSceneGUI, RegenerateAll
+    ├── SectionDrawer.cs                     # 8 foldout-секций инспектора
+    ├── ActionButtonsDrawer.cs               # Generate/Clear/Preview/RegenerateAll
+    ├── DebugInfoDrawer.cs                   # Статистика, причины отказов, советы
+    ├── EditorStyleManager.cs                # GUIStyle + цветной header-texture
+    ├── EditorFoldoutState.cs                # Static-состояние foldout'ов
+    ├── EditorGenerationDriver.cs            # EditorApplication.update-тик
+    ├── SpawnZoneSceneEditor.cs              # Handles: move/size/insert/delete + snap
+    ├── MinMaxRangeDrawers.cs                # Кастомные PropertyDrawer
+    └── WorldGenerationGizmos.cs             # Gizmos: зоны, лучи, кластеры
+```
+
+### 🧩 Ключевые подсистемы
+
+| Подсистема | Что делает |
+|------------|------------|
+| **PlacementValidator** | Ray/Sphere-cast по поверхностям, проверки угла, устойчивости, потолка, пола, avoidance, NavMesh. Single + Batch (RaycastCommand) пути. |
+| **PointGenerator** | Две стратегии: `RandomPointGenerator` (равномерно по зоне) и `ClusterPointGenerator` (кластеры с проверкой поверхностей через батч-джоб). |
+| **SpatialHash** | Пространственный хэш для O(1) проверки `minDistanceBetweenObjects`. Работает с `math.hash(int3)` или FNV-fallback. |
+| **PlacementJobs** | Persistent `NativeArray<RaycastCommand>` — без аллокаций в горячем цикле, авто-fallback на CPU при Sphere-кастах. |
+| **SpawnZoneBuilder** | Строит список зон: Box (main + extraBoxes) или Polygon (невыпуклые 3D-объёмы). |
+| **PolygonTriangulator** | Ear-clipping + выпуклость за O(n²), стек-аллокация при n ≤ 64. |
+| **ObjectInstantiator** | Батчинг по 20 объектов/кадр, `Awaitable.NextFrameAsync`, режим reuseExisting (SetActive вместо Destroy). |
+| **RuntimeSpawnQueueService** | Глобальная очередь `WorldGeneration` с сортировкой по `priority`. |
+| **NavMeshRegenerationService** | Reflection → `Unity.AI.Navigation.NavMeshSurface.BuildNavMesh()`; работает без hard-dependency. |
+| **RuntimeNavMeshBuilder** | `NavMeshBuilder.UpdateNavMeshDataAsync` — не блокирует главный поток. |
+| **FastRandom** | Детерминированный Xorshift128: ~5× быстрее `System.Random`, без боксинга. |
+| **GenerationSnapshot** | FNV-1a хэш зон + JsonUtility сериализация для save/load и воспроизводимости. |
+
+### ⚙️ Runtime-пайплайн
+
+```
+Awake / Generate()
+  → EnsureModulesInitialized()
+  → GeneratePlacementPointsBatch()
+        ├─ CanUseJobValidation ? Job-путь (RaycastCommand.ScheduleBatch)
+        └─ иначе CPU-путь (Validate + SpatialHash.Insert)
+  → CreateObjectsFromPlacementData()  ← ObjectInstantiator.InstantiateBatchAsync
+  → TryRuntimeNavMeshRegenerationAsync()
+  → CallGenerationCompleteExtensions()
+  → OnGenerationComplete?.Invoke()
+```
+
+### 🎨 Editor-пайплайн
+
+```
+OnInspectorGUI
+  → SectionDrawer × 8          (все настройки, foldout'ы)
+  → ActionButtonsDrawer        (Generate / Preview / RegenerateAll)
+  → DebugInfoDrawer            (статистика + советы)
+
+OnSceneGUI
+  → SpawnZoneSceneEditor.DrawForSpawner()
+        • Move центр зоны (FreeMoveHandle)
+        • Move вершины полигона
+        • Slider вертикального размера
+        • Insert / Delete (Ctrl-снап)
+  → DrawPreview()              (до 500 сфер: зелёные/красные)
+
+EditorGenerationDriver
+  → EditorApplication.update → WorldGeneration.EditorTick()
+  → SceneView.duringSceneGui → Repaint при генерации
+```
 
 ## ⚡ Требования
 
@@ -196,6 +309,21 @@
 
 </details>
 
+<details>
+<summary><strong>📐 Объекты спавнятся под неправильным углом</strong></summary>
+
+**Почему:** `Surface Angle Range` не соответствует рельефу сцены.
+
+**Как починить:**
+- Полы, склоны до 45° → поставь `(0, 45)`.
+- Стены и обрывы → `(60, 90)`.
+- Потолки, навесы → `(150, 180)`.
+- Хочешь любую поверхность → `(0, 180)`.
+- Отключить проверку → установи максимум `0`.
+
+Открой `📊 Дебаг информацию` — в причинах отказов появится `📐 Угол поверхности вне диапазона`, если настройка мешает.
+
+</details>
 <details>
 <summary><strong>🔦 Лучи не видны</strong></summary>
 
