@@ -8,7 +8,6 @@ using System.Threading;
 using UnityEditor;
 #endif
 
-// Alias — иначе конфликт UnityEngine.Debug <-> System.Diagnostics.Debug.
 using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace NeonImperium.WorldGenerations
@@ -59,9 +58,8 @@ namespace NeonImperium.WorldGenerations
         private List<NavMeshBuildSource> _runtimeNavMeshSources;
 
         private bool _generationInProgress;
-        // Защёлка: не даёт EditorTick запустить второй FinishEditorGenerationAsync,
-        // пока первый ещё не завершился (это и был баг с 17× дублями).
         private bool _editorInstantiationActive;
+        private int _generationVersion;
         private int _runtimeRetryCount;
         private bool _modulesInitialized;
 
@@ -82,8 +80,6 @@ namespace NeonImperium.WorldGenerations
         private int GetFrameBatchSize() =>
             CanUseJobValidation ? Mathf.Max(PlacementAttemptsPerFrame, settings.jobBatchSize) : PlacementAttemptsPerFrame;
 
-        // ─────────────────────── Lifecycle ───────────────────────
-
         private void Awake()
         {
             if (!Application.isPlaying) return;
@@ -95,10 +91,8 @@ namespace NeonImperium.WorldGenerations
         private void OnDestroy()
         {
             StopGeneration();
-
             _placementValidator?.Dispose();
             _placementValidator = null;
-
             _generationCts?.Dispose();
             _generationCts = null;
         }
@@ -110,8 +104,6 @@ namespace NeonImperium.WorldGenerations
             settings?.Clamp();
 
 #if UNITY_EDITOR
-            // Отменяем активную редакторную генерацию при изменении настроек:
-            // иначе модули пересоздаются, кэш остаётся, а hash очищается -> коллизии.
             if (!Application.isPlaying)
                 StopGeneration();
 #endif
@@ -160,14 +152,13 @@ namespace NeonImperium.WorldGenerations
             return tickHash + Environment.TickCount + counter;
         }
 
-        // ─────────────────────── Public API ───────────────────────
-
         [ContextMenu("Generate Objects")]
         public void Generate()
         {
-            // Блокируем повторный запуск: пока идёт инстанцирование (async),
-            // запускать новую генерацию опасно — старый async может доработать и добавить объекты.
-            if (_generationInProgress || _editorInstantiationActive)
+            // Отбиваем только если действительно идут обе фазы.
+            // Если застрял один флаг от прошлой отмены — начинаем заново (старую async
+            // инвалидирует version counter).
+            if (_generationInProgress && _editorInstantiationActive)
             {
                 UnityEngine.Debug.LogWarning($"[{name}] Генерация уже выполняется, повторный запуск проигнорирован.");
                 return;
@@ -189,8 +180,6 @@ namespace NeonImperium.WorldGenerations
 
             EnsureModulesInitialized();
 
-            // CTS создаётся для обоих путей (editor/runtime): отмена из StopGeneration
-            // теперь корректно прерывает и инстанциацию, не только вычисления.
             _generationCts?.Dispose();
             _generationCts = new CancellationTokenSource();
 
@@ -207,7 +196,6 @@ namespace NeonImperium.WorldGenerations
             if (Application.isPlaying) _ = GenerateAsync();
         }
 
-        /// <summary>Preview-прогон: N попыток валидации без Instantiate.</summary>
         public void GeneratePreview()
         {
             _previewCache.Clear();
@@ -228,8 +216,6 @@ namespace NeonImperium.WorldGenerations
                     continue;
                 }
 
-                // existingPoints — только валидные точки (невалидные имеют position=worldPos
-                // от старта луча и ошибочно отсекали соседей).
                 PlacementData data = _placementValidator.Validate(point, transform, _previewValid,
                     _debugLogger, _physicsService, null);
                 _previewCache.Add(data);
@@ -265,6 +251,7 @@ namespace NeonImperium.WorldGenerations
             _generationCts?.Dispose();
             _generationCts = new CancellationTokenSource();
             CancellationToken token = _generationCts.Token;
+            int version = ++_generationVersion;
 
             _generationInProgress = true;
             _runtimeRetryCount = 0;
@@ -313,7 +300,12 @@ namespace NeonImperium.WorldGenerations
                 }
 
                 await CreateObjectsFromPlacementData(token);
+
+                if (version != _generationVersion || token.IsCancellationRequested) return;
+
                 await TryRuntimeNavMeshRegenerationAsync(token);
+
+                if (version != _generationVersion || token.IsCancellationRequested) return;
 
                 CallGenerationCompleteExtensions();
                 OnGenerationComplete?.Invoke();
@@ -321,21 +313,17 @@ namespace NeonImperium.WorldGenerations
                 if (settings.destroyAfterGeneration && Application.isPlaying)
                     Destroy(this);
             }
-            catch (OperationCanceledException)
-            {
-                // штатная отмена
-            }
+            catch (OperationCanceledException) { }
             catch (Exception e)
             {
                 UnityEngine.Debug.LogException(e, this);
             }
             finally
             {
-                _generationInProgress = false;
+                if (version == _generationVersion)
+                    _generationInProgress = false;
             }
         }
-
-        // ─────────────────────── Batch generation ───────────────────────
 
         private void GeneratePlacementPointsBatch(int desiredCount)
         {
@@ -368,7 +356,6 @@ namespace NeonImperium.WorldGenerations
             }
         }
 
-        /// <summary>Job-путь: собрать кандидатов → ValidateBatch → разобрать результат.</summary>
         private void GeneratePlacementPointsBatchJob(int desiredCount)
         {
             int wanted = desiredCount;
@@ -398,9 +385,6 @@ namespace NeonImperium.WorldGenerations
             _placementValidator.ValidateBatch(_batchCandidates, 0, count, transform,
                 _debugLogger, _physicsService, _placementHash, _batchOutput);
 
-            // ValidateBatch проверяет min-distance против хэша, но НЕ вставляет точки хэш
-            // по ходу батча. Поэтому внутрибатчевые коллизии (две точки ближе min-distance
-            // друг к другу) ловятся здесь.
             float minDist = settings.minDistanceBetweenObjects;
             bool useMinDist = _placementHash != null && minDist > 0f;
 
@@ -430,26 +414,32 @@ namespace NeonImperium.WorldGenerations
             FailureStatistics[reason] = count + 1;
         }
 
-        // ─────────────────────── Instantiating ───────────────────────
-
         private async Awaitable CreateObjectsFromPlacementData(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
 
             bool wasActive = gameObject.activeSelf;
-            if (Application.isPlaying)
+            bool deactivated = false;
+
+            try
             {
-                gameObject.SetActive(false);
-                await Awaitable.NextFrameAsync(token);
+                if (Application.isPlaying)
+                {
+                    gameObject.SetActive(false);
+                    deactivated = true;
+                    await Awaitable.NextFrameAsync(token);
+                }
+
+                await ObjectInstantiator.InstantiateBatchAsync(
+                    _placementCache, transform, settings.population,
+                    settings.onSpawnExtensions, settings.reuseExistingObjects,
+                    settings.prefabs, token);
             }
-
-            await ObjectInstantiator.InstantiateBatchAsync(_placementCache, transform, settings.population,
-                settings.onSpawnExtensions, settings.reuseExistingObjects, token);
-
-            if (Application.isPlaying) gameObject.SetActive(wasActive);
+            finally
+            {
+                if (deactivated) gameObject.SetActive(wasActive);
+            }
         }
-
-        // ─────────────────────── NavMesh ───────────────────────
 
         private async Awaitable TryRuntimeNavMeshRegenerationAsync(CancellationToken token)
         {
@@ -459,22 +449,11 @@ namespace NeonImperium.WorldGenerations
             if (NavMeshRegenerationService.HasNavMeshSurface())
             {
                 int rebuilt = NavMeshRegenerationService.RebuildAllSurfacesSync();
-                if (rebuilt > 0)
-                {
-                    UnityEngine.Debug.Log(
-                        $"[{name}] Runtime NavMesh перегенерирован через NavMeshSurface: {rebuilt} surface(ов).");
-                    return;
-                }
+                if (rebuilt > 0) return;
             }
 
             NavMeshData data = settings.runtimeNavMeshData;
-            if (data == null)
-            {
-                UnityEngine.Debug.LogWarning(
-                    $"[{name}] requestNavMeshRegeneration=true, но runtimeNavMeshData не назначен и NavMeshSurface не найден.\n" +
-                    "Создайте NavMeshSurface (AI Navigation) → Bake → сохраните NavMeshData как .asset и назначьте в runtimeNavMeshData.");
-                return;
-            }
+            if (data == null) return;
 
             if (_runtimeNavMeshSources == null)
                 _runtimeNavMeshSources = new List<NavMeshBuildSource>(256);
@@ -485,21 +464,13 @@ namespace NeonImperium.WorldGenerations
                 data, bounds, NavMeshCollectGeometry.PhysicsColliders,
                 settings.collisionMask.value, settings.runtimeAgentTypeID, _runtimeNavMeshSources);
 
-            if (op == null)
-            {
-                UnityEngine.Debug.LogWarning(
-                    $"[{name}] Runtime NavMesh regeneration не запустилась (data/sources = null).");
-                return;
-            }
+            if (op == null) return;
 
             while (!op.isDone)
             {
                 token.ThrowIfCancellationRequested();
                 await Awaitable.NextFrameAsync(token);
             }
-
-            UnityEngine.Debug.Log(
-                $"[{name}] Runtime NavMesh перегенерирован (agentTypeID={settings.runtimeAgentTypeID}).");
         }
 
         private Bounds GetRuntimeBounds()
@@ -519,8 +490,6 @@ namespace NeonImperium.WorldGenerations
             }
         }
 
-        // ─────────────────────── Clear / Reset ───────────────────────
-
         [ContextMenu("Clear Objects")]
         public void ClearAll()
         {
@@ -529,7 +498,6 @@ namespace NeonImperium.WorldGenerations
             ResetGenerationState();
         }
 
-        /// <summary>Сброс кэшей без удаления дочерних объектов (reuseExistingObjects).</summary>
         private void ClearGenerationState()
         {
             StopGeneration();
@@ -552,6 +520,7 @@ namespace NeonImperium.WorldGenerations
 
         private void StopGeneration()
         {
+            _generationVersion++;      // инвалидирует любую висящую async
             _generationCts?.Cancel();
 
 #if UNITY_EDITOR
@@ -559,16 +528,10 @@ namespace NeonImperium.WorldGenerations
 #endif
 
             _generationInProgress = false;
-            // ВАЖНО: _editorInstantiationActive НЕ сбрасываем здесь.
-            // Сбрасывает только finally в FinishEditorGenerationAsync, когда async реально
-            // завершился. Иначе возможна гонка: отменили, сразу запустили новую генерацию,
-            // а старый async ещё дописывает объекты.
+            _editorInstantiationActive = false; // форсируем разблокировку
         }
 
-        // ─────────────────────── Editor-only ───────────────────────
-
 #if UNITY_EDITOR
-        /// <summary>Один тик редакторной генерации. Вызывается EditorGenerationDriver.</summary>
         internal void EditorTick()
         {
             if (!_generationInProgress) return;
@@ -582,7 +545,6 @@ namespace NeonImperium.WorldGenerations
 
             if (_placementCache.Count < settings.population)
             {
-                // Защита от бесконечного цикла в редакторе (например, при недостижимых настройках).
                 if (_totalPlacementAttempts >= settings.runtimeMaxAttempts)
                 {
                     UnityEngine.Debug.LogWarning(
@@ -592,7 +554,8 @@ namespace NeonImperium.WorldGenerations
                     if (!_editorInstantiationActive)
                     {
                         _editorInstantiationActive = true;
-                        _ = FinishEditorGenerationAsync();
+                        int v = _generationVersion;
+                        _ = FinishEditorGenerationAsync(v);
                     }
                     return;
                 }
@@ -601,39 +564,38 @@ namespace NeonImperium.WorldGenerations
             }
             else if (!_editorInstantiationActive)
             {
-                // КРИТИЧНО: флаг выставляется ДО запуска async, чтобы EditorTick
-                // не запускал параллельные FinishEditorGenerationAsync (это был баг).
                 _editorInstantiationActive = true;
-                _ = FinishEditorGenerationAsync();
+                int v = _generationVersion;
+                _ = FinishEditorGenerationAsync(v);
             }
         }
 
-        private async Awaitable FinishEditorGenerationAsync()
+        private async Awaitable FinishEditorGenerationAsync(int version)
         {
             CancellationToken token = _generationCts?.Token ?? CancellationToken.None;
             try
             {
                 await CreateObjectsFromPlacementData(token);
 
-                if (token.IsCancellationRequested) return;
+                if (version != _generationVersion || token.IsCancellationRequested) return;
 
                 CallGenerationCompleteExtensions();
                 OnGenerationComplete?.Invoke();
                 UnityEngine.Debug.Log($"[{name}] Генерация завершена. Создано: {transform.childCount}");
             }
-            catch (OperationCanceledException)
-            {
-                // штатная отмена
-            }
+            catch (OperationCanceledException) { }
             catch (Exception e)
             {
                 UnityEngine.Debug.LogException(e, this);
             }
             finally
             {
-                _editorInstantiationActive = false;
-                _generationInProgress = false;
-                EditorGenerationDriver.Stop(this);
+                if (version == _generationVersion)
+                {
+                    _editorInstantiationActive = false;
+                    _generationInProgress = false;
+                    EditorGenerationDriver.Stop(this);
+                }
             }
         }
 

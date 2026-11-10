@@ -6,7 +6,6 @@ using UnityEngine;
 
 namespace NeonImperium.WorldGenerations
 {
-    /// <summary>Драйвер редакторной генерации. Хранит WeakReference и тикает активные спавнеры.</summary>
     public static class EditorGenerationDriver
     {
         private static readonly List<WeakReference<WorldGeneration>> _active = new();
@@ -61,11 +60,7 @@ namespace NeonImperium.WorldGenerations
 
                 if (!spawner.IsGenerating) continue;
 
-                // Изолируем исключения: сбой одного спавнера не блокирует тики остальных.
-                try
-                {
-                    spawner.EditorTick();
-                }
+                try { spawner.EditorTick(); }
                 catch (Exception e)
                 {
                     Debug.LogException(e, spawner);

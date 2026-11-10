@@ -40,7 +40,6 @@ namespace NeonImperium.WorldGenerations
             EditorApplication.update -= RegenerateAllUpdate;
         }
 
-        /// <summary>Интерактивное редактирование зон + отрисовка preview для выделенных спавнеров.</summary>
         private void OnSceneGUI()
         {
             if (Application.isPlaying) return;
@@ -61,7 +60,6 @@ namespace NeonImperium.WorldGenerations
             }
         }
 
-        /// <summary>Рисует точки PreviewCache. Валидные — зелёные, невалидные — красные (если включено).</summary>
         private static void DrawPreview(WorldGeneration spawner)
         {
             IReadOnlyList<PlacementData> cache = spawner.PreviewCache;
@@ -200,6 +198,10 @@ namespace NeonImperium.WorldGenerations
 
         public void RegenerateAllSpawners()
         {
+            if (_isRegeneratingAll) return;
+
+            EditorApplication.update -= RegenerateAllUpdate;
+
             _allSpawners = new List<WorldGeneration>(FindObjectsByType<WorldGeneration>(FindObjectsInactive.Include));
 
             for (int i = 0; i < _allSpawners.Count - 1; i++)
@@ -236,10 +238,23 @@ namespace NeonImperium.WorldGenerations
 
             WorldGeneration current = _allSpawners[_currentSpawnerIndex];
 
-            if (!current.IsGenerating && current.SpawnedCount == 0)
-                current.Generate();
-            else if (!current.IsGenerating)
+            if (current == null)
+            {
                 _currentSpawnerIndex++;
+                return;
+            }
+
+            if (!current.IsGenerating && current.SpawnedCount == 0)
+            {
+                current.Generate();
+                // Если Generate не запустил генерацию (застрял / конфиг) — скип, иначе
+                // RegenerateAllUpdate зациклится на нём.
+                if (!current.IsGenerating) _currentSpawnerIndex++;
+            }
+            else if (!current.IsGenerating)
+            {
+                _currentSpawnerIndex++;
+            }
         }
 
         private void TryRegenerateNavMeshOnFullComplete()
