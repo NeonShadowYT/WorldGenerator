@@ -59,8 +59,18 @@ namespace NeonImperium.WorldGenerations
                     continue;
                 }
 
-                if (spawner.IsGenerating)
+                if (!spawner.IsGenerating) continue;
+
+                // Изолируем исключения: сбой одного спавнера не блокирует тики остальных.
+                try
+                {
                     spawner.EditorTick();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e, spawner);
+                    _active.RemoveAt(i);
+                }
             }
 
             if (_active.Count == 0) Unsubscribe();

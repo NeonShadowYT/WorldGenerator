@@ -8,7 +8,7 @@ using System.Threading;
 using UnityEditor;
 #endif
 
-// Alias вместо `using System.Diagnostics;` — иначе конфликт UnityEngine.Debug <-> System.Diagnostics.Debug.
+// Alias — иначе конфликт UnityEngine.Debug <-> System.Diagnostics.Debug.
 using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace NeonImperium.WorldGenerations
@@ -42,6 +42,7 @@ namespace NeonImperium.WorldGenerations
 
         [System.NonSerialized] private List<PlacementData> _placementCache = new();
         [System.NonSerialized] private List<PlacementData> _previewCache = new();
+        [System.NonSerialized] private readonly List<PlacementData> _previewValid = new();
         [SerializeField, HideInInspector] private int _totalPlacementAttempts;
 
         public Dictionary<FailureReasonType, int> FailureStatistics { get; private set; } = new();
@@ -58,6 +59,9 @@ namespace NeonImperium.WorldGenerations
         private List<NavMeshBuildSource> _runtimeNavMeshSources;
 
         private bool _generationInProgress;
+        // Защёлка: не даёт EditorTick запустить второй FinishEditorGenerationAsync,
+        // пока первый ещё не завершился (это и был баг с 17× дублями).
+        private bool _editorInstantiationActive;
         private int _runtimeRetryCount;
         private bool _modulesInitialized;
 
@@ -92,7 +96,6 @@ namespace NeonImperium.WorldGenerations
         {
             StopGeneration();
 
-            // Валидатор владеет PlacementJobs — dispose'им через его интерфейс.
             _placementValidator?.Dispose();
             _placementValidator = null;
 
@@ -103,7 +106,16 @@ namespace NeonImperium.WorldGenerations
         private void OnValidate()
         {
             _previewCache.Clear();
+            _previewValid.Clear();
             settings?.Clamp();
+
+#if UNITY_EDITOR
+            // Отменяем активную редакторную генерацию при изменении настроек:
+            // иначе модули пересоздаются, кэш остаётся, а hash очищается -> коллизии.
+            if (!Application.isPlaying)
+                StopGeneration();
+#endif
+
             _modulesInitialized = false;
         }
 
@@ -111,7 +123,6 @@ namespace NeonImperium.WorldGenerations
         {
             if (_modulesInitialized) return;
 
-            // Пересоздаём валидатор — старый освобождает свои persistent-буферы.
             _placementValidator?.Dispose();
             _placementValidator = null;
 
@@ -154,7 +165,14 @@ namespace NeonImperium.WorldGenerations
         [ContextMenu("Generate Objects")]
         public void Generate()
         {
-            if (_generationInProgress) return;
+            // Блокируем повторный запуск: пока идёт инстанцирование (async),
+            // запускать новую генерацию опасно — старый async может доработать и добавить объекты.
+            if (_generationInProgress || _editorInstantiationActive)
+            {
+                UnityEngine.Debug.LogWarning($"[{name}] Генерация уже выполняется, повторный запуск проигнорирован.");
+                return;
+            }
+
             if (settings.prefabs == null || settings.prefabs.Length == 0)
             {
                 UnityEngine.Debug.LogError("Префаб не настроен!", this);
@@ -171,10 +189,16 @@ namespace NeonImperium.WorldGenerations
 
             EnsureModulesInitialized();
 
+            // CTS создаётся для обоих путей (editor/runtime): отмена из StopGeneration
+            // теперь корректно прерывает и инстанциацию, не только вычисления.
+            _generationCts?.Dispose();
+            _generationCts = new CancellationTokenSource();
+
 #if UNITY_EDITOR
             if (!Application.isPlaying)
             {
                 _generationInProgress = true;
+                _editorInstantiationActive = false;
                 EditorGenerationDriver.Start(this);
                 UnityEngine.Debug.Log($"[{name}] Запущена генерация в редакторе (асинхронно).");
                 return;
@@ -187,6 +211,7 @@ namespace NeonImperium.WorldGenerations
         public void GeneratePreview()
         {
             _previewCache.Clear();
+            _previewValid.Clear();
             if (settings.prefabs == null || settings.prefabs.Length == 0) return;
             if (settings.collisionMask.value == 0) return;
 
@@ -202,12 +227,21 @@ namespace NeonImperium.WorldGenerations
                     _previewCache.Add(new PlacementData { isValid = false, failureReason = FailureReasonType.NoHit });
                     continue;
                 }
-                _previewCache.Add(_placementValidator.Validate(point, transform, _previewCache,
-                    _debugLogger, _physicsService, null));
+
+                // existingPoints — только валидные точки (невалидные имеют position=worldPos
+                // от старта луча и ошибочно отсекали соседей).
+                PlacementData data = _placementValidator.Validate(point, transform, _previewValid,
+                    _debugLogger, _physicsService, null);
+                _previewCache.Add(data);
+                if (data.isValid) _previewValid.Add(data);
             }
         }
 
-        public void ClearPreview() => _previewCache.Clear();
+        public void ClearPreview()
+        {
+            _previewCache.Clear();
+            _previewValid.Clear();
+        }
 
         public async Awaitable GenerateAsync()
         {
@@ -242,11 +276,12 @@ namespace NeonImperium.WorldGenerations
                 {
                     token.ThrowIfCancellationRequested();
 
-                    _placementCache = new List<PlacementData>(settings.population);
+                    _placementCache.Clear();
                     _totalPlacementAttempts = 0;
                     FailureStatistics.Clear();
                     ClearDebugRays();
                     _placementHash?.Clear();
+                    _batchCandidates.Clear();
 
                     if (_runtimeRetryCount > 0)
                     {
@@ -288,7 +323,7 @@ namespace NeonImperium.WorldGenerations
             }
             catch (OperationCanceledException)
             {
-                // штатная отмена — тихо выходим
+                // штатная отмена
             }
             catch (Exception e)
             {
@@ -363,15 +398,29 @@ namespace NeonImperium.WorldGenerations
             _placementValidator.ValidateBatch(_batchCandidates, 0, count, transform,
                 _debugLogger, _physicsService, _placementHash, _batchOutput);
 
+            // ValidateBatch проверяет min-distance против хэша, но НЕ вставляет точки хэш
+            // по ходу батча. Поэтому внутрибатчевые коллизии (две точки ближе min-distance
+            // друг к другу) ловятся здесь.
+            float minDist = settings.minDistanceBetweenObjects;
+            bool useMinDist = _placementHash != null && minDist > 0f;
+
             for (int i = 0; i < count; i++)
             {
                 PlacementData data = _batchOutput[i];
-                if (data.isValid)
+                if (!data.isValid)
                 {
-                    _placementCache.Add(data);
-                    _placementHash?.Insert(data.position, _placementCache.Count - 1);
+                    RecordFailure(data.failureReason);
+                    continue;
                 }
-                else RecordFailure(data.failureReason);
+
+                if (useMinDist && _placementHash.HasWithin(data.position, minDist))
+                {
+                    RecordFailure(FailureReasonType.TooCloseToOther);
+                    continue;
+                }
+
+                _placementCache.Add(data);
+                _placementHash?.Insert(data.position, _placementCache.Count - 1);
             }
         }
 
@@ -385,6 +434,8 @@ namespace NeonImperium.WorldGenerations
 
         private async Awaitable CreateObjectsFromPlacementData(CancellationToken token)
         {
+            token.ThrowIfCancellationRequested();
+
             bool wasActive = gameObject.activeSelf;
             if (Application.isPlaying)
             {
@@ -488,6 +539,8 @@ namespace NeonImperium.WorldGenerations
         private void ResetGenerationState()
         {
             _placementCache.Clear();
+            _previewCache.Clear();
+            _previewValid.Clear();
             _totalPlacementAttempts = 0;
             _runtimeRetryCount = 0;
             ClearDebugRays();
@@ -506,6 +559,10 @@ namespace NeonImperium.WorldGenerations
 #endif
 
             _generationInProgress = false;
+            // ВАЖНО: _editorInstantiationActive НЕ сбрасываем здесь.
+            // Сбрасывает только finally в FinishEditorGenerationAsync, когда async реально
+            // завершился. Иначе возможна гонка: отменили, сразу запустили новую генерацию,
+            // а старый async ещё дописывает объекты.
         }
 
         // ─────────────────────── Editor-only ───────────────────────
@@ -524,25 +581,59 @@ namespace NeonImperium.WorldGenerations
             }
 
             if (_placementCache.Count < settings.population)
+            {
+                // Защита от бесконечного цикла в редакторе (например, при недостижимых настройках).
+                if (_totalPlacementAttempts >= settings.runtimeMaxAttempts)
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"[{name}] Достигнут лимит попыток ({_totalPlacementAttempts}). " +
+                        $"Размещено {_placementCache.Count}/{settings.population}. Завершаю.");
+
+                    if (!_editorInstantiationActive)
+                    {
+                        _editorInstantiationActive = true;
+                        _ = FinishEditorGenerationAsync();
+                    }
+                    return;
+                }
+
                 GeneratePlacementPointsBatch(GetFrameBatchSize());
-            else
+            }
+            else if (!_editorInstantiationActive)
+            {
+                // КРИТИЧНО: флаг выставляется ДО запуска async, чтобы EditorTick
+                // не запускал параллельные FinishEditorGenerationAsync (это был баг).
+                _editorInstantiationActive = true;
                 _ = FinishEditorGenerationAsync();
+            }
         }
 
         private async Awaitable FinishEditorGenerationAsync()
         {
+            CancellationToken token = _generationCts?.Token ?? CancellationToken.None;
             try
             {
-                await CreateObjectsFromPlacementData(CancellationToken.None);
+                await CreateObjectsFromPlacementData(token);
+
+                if (token.IsCancellationRequested) return;
+
                 CallGenerationCompleteExtensions();
                 OnGenerationComplete?.Invoke();
-                StopGeneration();
                 UnityEngine.Debug.Log($"[{name}] Генерация завершена. Создано: {transform.childCount}");
+            }
+            catch (OperationCanceledException)
+            {
+                // штатная отмена
             }
             catch (Exception e)
             {
                 UnityEngine.Debug.LogException(e, this);
-                StopGeneration();
+            }
+            finally
+            {
+                _editorInstantiationActive = false;
+                _generationInProgress = false;
+                EditorGenerationDriver.Stop(this);
             }
         }
 
